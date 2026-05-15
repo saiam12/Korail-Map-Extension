@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Korail 지도 패널",
+  "version": "1.0",
+  "description": "Korail 열차 검색 결과에 정차역 지도를 표시합니다",
+  "permissions": ["scripting"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "https://www.korail.com/*",
+    "https://maps.googleapis.com/*",
+    "https://routes.googleapis.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://www.korail.com/*"],
+      "js": ["content.js"],
+      "css": ["panel.css", "leaflet.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "leaflet.js",
+        "leaflet.css",
+        "leaflet-images/*.png",
+        "station-data.js",
+        "map-panel.js",
+        "api-config.js",
+        "injected.js"
+      ],
+      "matches": ["https://www.korail.com/*"]
+    }
+  ]
+}
