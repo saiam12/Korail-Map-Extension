@@ -74,8 +74,8 @@ function positionHomeNearestPanel(panel) {
   const rect = findHomeQuickMenu();
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
-  const gap = Math.max(12, viewportWidth * 0.009);
-  const marginX = Math.max(16, viewportWidth * 0.013);
+  const gap = Math.max(5, viewportWidth * 0.009);//12,0.009
+  const marginX = Math.max(5, viewportWidth * 0.005);//16,0.013
   const panelWidth = panel.offsetWidth || 320;
   const fallbackRect = {
     top: viewportHeight * 0.18,
