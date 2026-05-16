@@ -32,17 +32,15 @@ async function handleGoogleApiRequest(request) {
   }
 
   if (request.kind === "route") {
-    const response = await fetch(`https://routes.googleapis.com/directions/v2:computeRoutes?key=${encodeURIComponent(request.key)}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Goog-FieldMask": "routes.duration,routes.distanceMeters",
-      },
-      body: JSON.stringify(request.body),
-    });
+    const origins = `${request.originLat},${request.originLng}`;
+const destinations = request.destinations.map(d => `${d.lat},${d.lng}`).join("|");
+const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(origins)}&destinations=${encodeURIComponent(destinations)}&mode=driving&language=ko&key=${request.key}`;
+
+    const response = await fetch(url);
     const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error?.message || `Routes API request failed: ${response.status}`);
+    console.log("[Korail Map] Distance Matrix raw:", JSON.stringify(data));
+    if (!response.ok || data.status !== "OK") {
+      throw new Error(data.error_message || `Distance Matrix API request failed: ${data.status}`);
     }
     return data;
   }

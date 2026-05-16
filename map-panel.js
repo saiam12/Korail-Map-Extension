@@ -87,7 +87,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
   const map = L.map(container, {
     maxBounds: koreaBounds,
     maxBoundsViscosity: 1.0,
-    minZoom: 6,
+    minZoom: 5,
   }).setView([36.5, 127.8], 7);
 
   L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png", {
@@ -169,16 +169,20 @@ function initStationMap(container, popup, currentDep, currentArr) {
       if (a._korailRegionHoverBound) return;
       a._korailRegionHoverBound = true;
       a.addEventListener("mouseenter", () => {
+        // 선택된(active) 지역일 때만 트래킹
+        const isActive = a.closest("li")?.classList.contains("active") ||
+                        a.classList.contains("active") ||
+                        a.closest(".ch_tag")?.classList.contains("active");
+        if (!isActive) return;
         const regionName = a.textContent.trim();
         const stationNames = (REGION_STATIONS[regionName] || []).filter(n => STATIONS[n]);
         if (stationNames.length > 0) {
           const coords = stationNames.map(n => [STATIONS[n].lat, STATIONS[n].lng]);
-          map.flyToBounds(coords, { padding: [30, 30], duration: 0.4 });
+          map.flyToBounds(coords, { padding: [30, 30], duration: 0.5 });
         }
       });
-      // mouseleave 시 아무것도 안 함 → 그 상태 유지
     });
-  }
+  } 
 
   function attachTabEvents() {
     const activeTab = popup.querySelector(".tabPage.active") || popup;
@@ -193,7 +197,8 @@ function initStationMap(container, popup, currentDep, currentArr) {
       const activeRegionBtn = regionList.querySelector(".ch_tag.active a, a.active");
       const activeRegionName = activeRegionBtn?.textContent.trim() || "";
       const currentStationNames = (REGION_STATIONS[activeRegionName] || []).filter(n => STATIONS[n]);
-      if (currentStationNames.length > 0) {
+      if (currentStationNames.length > 0 && !map._korailInitialized) {
+        map._korailInitialized = true;
         showOnlyStations(currentStationNames);
         const coords = currentStationNames.map(n => [STATIONS[n].lat, STATIONS[n].lng]);
         map.flyToBounds(coords, { padding: [30, 30], duration: 0.5 });
@@ -214,7 +219,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
         });
       });
 
-      attachRegionHover(regionList);
+      //attachRegionHover(regionList);
       attachStationHover(stationList);
 
     } else {

@@ -13,7 +13,9 @@
   overflow: hidden;
   position: relative;
   top: 16px;
+  z-index: 0;
 }
+
 
 #korail-nearest-station-panel {
   position: absolute;
@@ -282,14 +284,14 @@
 
 /* 주요역 (더 크게) */
 .korail-dot.is-major {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 
 /* 점 마커 기본 */
 .korail-dot {
-  width: 10px;
-  height: 10px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: #cccccc;
   border: 2px solid white;
