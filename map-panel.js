@@ -60,11 +60,13 @@ function initMap(container, dep, arr, stations, fullRoute) {
 
     const icon = L.divIcon({
       className: "",
-      html: `<div class="korail-dot-wrap">
-               <div class="korail-dot ${dotClass}"></div>
-               ${isDep || isArr ? `<span class="korail-dot-label ${dotClass}">${name}</span>` : ""}
-             </div>`,
-      iconAnchor: [6, 6],
+      html: `<div class="korail-dot-wrap ${isDep || isArr ? "is-label" : ""}">
+               ${isDep || isArr
+                 ? `<span class="korail-dot-label ${dotClass}">${name}</span>`
+                 : `<div class="korail-dot ${dotClass}"></div>`}
+              </div>`,
+      iconSize: isDep || isArr ? [0, 0] : [12, 12],
+      iconAnchor: isDep || isArr ? [0, 0] : [6, 6],
     });
 
     L.marker([coords.lat, coords.lng], { icon })
@@ -106,11 +108,13 @@ function initStationMap(container, popup, currentDep, currentArr) {
 
     const icon = L.divIcon({
       className: "",
-      html: `<div class="korail-dot-wrap">
-               <div class="korail-dot ${dotClass} ${majorClass}"></div>
-               ${isCurrentDep || isCurrentArr ? `<span class="korail-dot-label ${dotClass}">${name}</span>` : ""}
-             </div>`,
-      iconAnchor: [6, 6],
+      html: `<div class="korail-dot-wrap ${isCurrentDep || isCurrentArr ? "is-label" : ""}">
+               ${isCurrentDep || isCurrentArr
+                 ? `<span class="korail-dot-label ${dotClass}">${name}</span>`
+                 : `<div class="korail-dot ${dotClass} ${majorClass}"></div>`}
+              </div>`,
+      iconSize: isCurrentDep || isCurrentArr ? [0, 0] : [12, 12],
+      iconAnchor: isCurrentDep || isCurrentArr ? [0, 0] : [6, 6],
     });
     markers[name] = L.marker([coords.lat, coords.lng], { icon })
       .bindTooltip(name, { permanent: false, direction: "top" })

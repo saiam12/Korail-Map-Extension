@@ -11,7 +11,7 @@
   border: 1px solid #ddd;
   border-radius: 8px;
   overflow: hidden;
-  position: relative;
+  position: sticky;
   top: 16px;
   z-index: 0;
 }
@@ -23,6 +23,12 @@
   width: clamp(260px, 18vw, 340px);
   color: #111827;
   font-family: inherit;
+}
+
+#korail-nearest-station-panel.is-korail-muted,
+#korail-nearest-mini-btn.is-korail-muted,
+#korail-intro-toggle-btn.is-korail-muted {
+  z-index: 5 !important;
 }
 
 .korail-nearest-card {
@@ -261,6 +267,12 @@
   align-items: center;
   gap: 4px;
   white-space: nowrap;
+}
+
+.korail-dot-wrap.is-label {
+  display: inline-flex;
+  width: max-content;
+  transform: translate(-50%, -50%);
 }
 
 .korail-dot-label {
