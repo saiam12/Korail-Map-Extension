@@ -2,7 +2,7 @@
 
 function renderMap(container, dep, arr, stations, fullRoute) {
   try {
-    initMap(container, dep, arr, stations, fullRoute);
+    window._korailMapInstance = initMap(container, dep, arr, stations, fullRoute);
   } catch (error) {
     console.warn("[Korail Map] Failed to render route map:", error);
   }
@@ -73,6 +73,7 @@ function initMap(container, dep, arr, stations, fullRoute) {
   });
 
   setTimeout(() => map.invalidateSize(), 100);
+  return map;
 }
 
 function renderStationMap(container, popup, currentDep, currentArr) {
@@ -100,7 +101,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
     const isCurrentDep = name === currentDep;
     const isCurrentArr = name === currentArr;
     const isMajor = coords.major === true;
-    const dotClass = isCurrentDep ? "is-arr" : isCurrentArr ? "is-dep" : "is-gray";
+    const dotClass = isCurrentDep ? "is-dep" : isCurrentArr ? "is-arr" : "is-gray";
     const majorClass = isMajor ? "is-major" : "";
 
     const icon = L.divIcon({
@@ -225,6 +226,13 @@ function initStationMap(container, popup, currentDep, currentArr) {
     } else {
       // 주요역 탭
       showMajorStations();
+
+      [currentDep, currentArr].forEach(name => {
+        if (name && STATIONS[name] && !STATIONS[name].major) {
+          if (!map.hasLayer(markers[name])) markers[name].addTo(map);
+        }
+      });
+
       activeTab.querySelectorAll("a").forEach((a) => {
         const name = a.textContent.trim();
         if (!STATIONS[name]) return;

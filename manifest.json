@@ -9,8 +9,8 @@
   },
   "host_permissions": [
     "https://www.korail.com/*",
-    "https://maps.googleapis.com/*",
-    "https://routes.googleapis.com/*"
+    "https://maps.apigw.ntruss.com/*",
+    "https://nominatim.openstreetmap.org/*"
   ],
   "content_scripts": [
     {

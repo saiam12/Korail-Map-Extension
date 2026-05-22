@@ -69,8 +69,9 @@ function findHomeQuickMenu() {
 
   return { left, top, right, bottom, width: right - left, height: bottom - top };
 }
-
+let homePanelMiniOpen = false;
 function positionHomeNearestPanel(panel) {
+  if (location.pathname.includes("/intro")) return;
   const rect = findHomeQuickMenu();
   const viewportWidth = window.innerWidth;
   const gap = Math.max(5, viewportWidth * 0.009);
@@ -91,16 +92,21 @@ function positionHomeNearestPanel(panel) {
 
   // 공간이 충분한지 확인
   const hasRightSpace = baseRect.right + gap + panelWidth <= viewportWidth - marginX;
-  const hasLeftSpace = baseRect.left - panelWidth - gap >= marginX;
-  console.log("[Korail] hasRightSpace:", hasRightSpace, "hasLeftSpace:", hasLeftSpace, "baseRect.right:", baseRect.right, "panelWidth:", panelWidth, "viewportWidth:", viewportWidth);
+  //const hasLeftSpace = baseRect.left - panelWidth - gap >= marginX;
 
-  if (!hasRightSpace && !hasLeftSpace) {
-    // 공간 부족 → 패널 숨기고 미니 버튼 표시
-    panel.style.display = "none";
+  if (!hasRightSpace) {
     showMiniButton(bannerRect, baseRect);
+    console.warn("[Korail] miniOpen:", panel.dataset.miniOpen);
+    const miniBtn = document.getElementById("korail-nearest-mini-btn");
+    const isOpen = miniBtn?.textContent.includes("닫기");
+    // 공간 부족 → 패널 숨기고 미니 버튼 표시
+    if (!homePanelMiniOpen) {
+      panel.style.display = "none";
+    }
     return;
   }
  
+  homePanelMiniOpen = false;
   panel.style.display = "";
   hideMiniButton();
 
@@ -110,6 +116,7 @@ function positionHomeNearestPanel(panel) {
   const maxLeft = viewportWidth - panelWidth - marginX;
   const left = Math.min(Math.max(marginX, desiredLeft), maxLeft);
 
+  panel.style.position = "absolute";
   panel.style.top = `${bannerTop + window.scrollY}px`;
   panel.style.left = `${left + window.scrollX}px`;
   if (panelHeight > 0) panel.style.height = `${panelHeight}px`;
@@ -120,51 +127,63 @@ function showMiniButton(bannerRect, baseRect) {
   if (!btn) {
     btn = document.createElement("button");
     btn.id = "korail-nearest-mini-btn";
-    btn.textContent = "가까운 주요역 찾기";
-    btn.style.cssText = `
-      position: absolute;
-      z-index: 25;
-      bottom: 8px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 6px 14px;
-      background: rgba(255,255,255,0.92);
-      border: 1px solid #0052a4;
-      border-radius: 999px;
-      color: #0052a4;
-      font-size: 13px;
-      font-weight: 800;
-      cursor: pointer;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-      white-space: nowrap;
-    `;
-    // 배너 컨테이너에 붙임
-    const bannerContainer = document.querySelector(".pop_slide")?.closest("div")?.parentElement;
-    if (bannerContainer) {
-      bannerContainer.style.position = "relative";
-      bannerContainer.appendChild(btn);
-    } else {
-      document.body.appendChild(btn);
-    }
+    btn.textContent = "🚉 가까운 주요역 찾기";
+
+    document.body.appendChild(btn);
+
     btn.addEventListener("click", () => {
       const panel = document.getElementById(HOME_PANEL_ID);
       if (!panel) return;
-      if (panel.style.display === "none" || !panel.style.display) {
-        // 패널을 화면 중앙에 fixed로 표시
-        panel.style.display = "";
-        panel.style.position = "fixed";
-        panel.style.top = "50%";
-        panel.style.left = "50%";
-        panel.style.transform = "translate(-50%, -50%)";
-        panel.style.height = "";
+      const isOpen = panel.style.display !== "none";
+      homePanelMiniOpen = !isOpen;
+      if (!isOpen) {
+        const btnRect = btn.getBoundingClientRect();
+        const panelWidth = panel.offsetWidth || 320;
+        const panelHeight = panel.offsetHeight || 400;
+        const hasRightSpace = btnRect.right + panelWidth <= window.innerWidth;
+        const leftPos = hasRightSpace ? btnRect.right : btnRect.left - panelWidth;
+        const topPos = btnRect.bottom - panelHeight;
+        panel.style.position = "absolute";
+        panel.style.top = `${topPos + window.scrollY}px`;
+        panel.style.left = `${leftPos + window.scrollX}px`;
         panel.style.zIndex = "9999";
-        btn.textContent = "닫기";
-      } else {
-        panel.style.display = "none";
-        btn.textContent = "가까운 주요역 찾기";
+        panel.style.height = "";
       }
+      panel.style.display = isOpen ? "none" : "";
+      panel.dataset.miniOpen = isOpen ? "false" : "true";
+      btn.textContent = isOpen ? "🚉 가까운 주요역 찾기" : "✕ 닫기";
     });
   }
+
+  // 위치 계산
+  const eventPop = document.querySelector("div.layer_wrap.event-pop");
+  const ticketBox = document.querySelector("div.ticket_box");
+  console.log("[Korail] showMiniButton - eventPop:", !!eventPop, "ticketBox:", !!ticketBox);
+
+  if (eventPop && ticketBox) {
+    const popRect = eventPop.getBoundingClientRect();
+    const ticketRect = ticketBox.getBoundingClientRect();
+    const midY = (popRect.bottom + ticketRect.top) / 2;
+
+    btn.style.cssText = `
+      position: fixed;
+      top: ${midY + window.scrollY}px;
+      left: ${popRect.left + window.scrollX}px;
+      transform: translateY(-50%);
+      z-index: 9999;
+      padding: 10px 24px;
+      background: #0052a4;
+      color: white;
+      border: none;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      white-space: nowrap;
+    `;
+  }
+
   btn.style.display = "";
 }
   
@@ -173,8 +192,12 @@ function hideMiniButton() {
   if (btn) btn.style.display = "none";
 } 
 
-function getGoogleMapsApiKey() {
-  return window.KORAIL_MAP_CONFIG?.googleMapsApiKey?.trim() || "";
+function getNaverApiConfig() {
+  return {
+    clientId: window.KORAIL_MAP_CONFIG?.naverClientId?.trim() || "",
+    clientSecret: window.KORAIL_MAP_CONFIG?.naverClientSecret?.trim() || "",
+    odsayApiKey: window.KORAIL_MAP_CONFIG?.odsayApiKey?.trim() || "",
+  };
 }
 
 function normalizeGoogleApiError(message) {
@@ -204,12 +227,12 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-function requestGoogleApi(kind, payload) {
+function requestNaverApi(kind, payload) {
   return new Promise((resolve, reject) => {
     const requestId = `korail-map-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const timeoutId = setTimeout(() => {
       window.removeEventListener("message", handleResponse);
-      reject(new Error("Google API 응답 시간이 초과되었습니다."));
+      reject(new Error("Naver API 응답 시간이 초과되었습니다."));
     }, 12000);
 
     function handleResponse(event) {
@@ -221,7 +244,7 @@ function requestGoogleApi(kind, payload) {
       if (response.ok) {
         resolve(response.data);
       } else {
-        reject(new Error(buildGoogleApiError(response.error || "Google API 요청에 실패했습니다.")));
+        reject(new Error(buildGoogleApiError(response.error || "Naver API 요청에 실패했습니다.")));
       }
     }
 
@@ -295,9 +318,7 @@ function renderNearestResults(panel, state, message, stations = []) {
         <li>
           <span class="korail-nearest-list__rank">${index + 1}</span>
           <span class="korail-nearest-list__name">${station.name}</span>
-          <span class="korail-nearest-list__meta">
-            ${station.durationText ? `${station.durationText} · ` : ""}${station.distanceText}
-          </span>
+          <span class="korail-nearest-list__meta">🚗 ${station.durationText} · 📍 ${station.distanceText}</span>
         </li>
       `).join("")}
     </ol>
@@ -305,16 +326,12 @@ function renderNearestResults(panel, state, message, stations = []) {
 }
 
 async function geocodeAddress(address) {
-  const key = getGoogleMapsApiKey();
-  if (!key) throw new Error("api-config.js에 Google Maps API 키를 입력해 주세요.");
-  const data = await requestGoogleApi("geocode", { key, address });
-  if (data.status !== "OK" || !data.results?.[0]) {
-    const rawError = [data.status, data.error_message].filter(Boolean).join(" - ");
-    throw new Error(buildGoogleApiError(rawError || "주소를 좌표로 변환하지 못했습니다."));
-  }
-
-  const location = data.results[0].geometry.location;
-  return { lat: location.lat, lng: location.lng };
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=kr`;
+  const response = await fetch(url, { headers: { "Accept-Language": "ko", "User-Agent": "KorailMapExtension/1.0" } });
+  if (!response.ok) throw new Error(`Geocoding 요청 실패: ${response.status}`);
+  const data = await response.json();
+  if (!data[0]) throw new Error("주소나 장소를 찾을 수 없습니다.");
+  return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
 }
 
 function getNearestByDistance(origin, limit = 3) {
@@ -332,39 +349,42 @@ function getNearestByDistance(origin, limit = 3) {
 }
 
 async function getRoutesInfo(origin, stations) {
-  const key = getGoogleMapsApiKey();
-  const data = await requestGoogleApi("route", {
-    key,
-    originLat: origin.lat,
-    originLng: origin.lng,
-    destinations: stations.map(s => ({ lat: s.lat, lng: s.lng })),
-  });
-
-  return stations.map((station, i) => {
-    const element = data.rows[0].elements[i];
-    if (element.status !== "OK") return null;
-    return {
-      ...station,
-      durationSeconds: element.duration.value,
-      durationText: formatDuration(element.duration.value),
-      distanceText: formatDistance(element.distance.value),
-    };
-  }).filter(Boolean);
+  const { clientId, clientSecret } = getNaverApiConfig();
+  const results = await Promise.all(stations.map(async (station) => {
+    try {
+      const drivingData = await requestNaverApi("driving", { clientId, clientSecret, startLat: origin.lat, startLng: origin.lng, goalLat: station.lat, goalLng: station.lng });
+      const drivingSummary = drivingData.route?.trafast?.[0]?.summary;
+      if (!drivingSummary) return null;
+      return {
+        ...station,
+        durationSeconds: drivingSummary.duration / 1000,
+        durationText: formatDuration(drivingSummary.duration / 1000),
+        distanceText: formatDistance(drivingSummary.distance),
+        distanceMeters: drivingSummary.distance,
+      };
+    } catch {
+      return null;
+    }
+  }));
+  return results.filter(Boolean);
 }
 
-async function searchNearestStations(panel, mode) {
+async function searchNearestStations(panel) {
   const input = panel.querySelector("[data-nearest-address]");
-  const address = input?.value.trim();
+  const address = input?.value.trim().replace(/([가-힣])\s+(\d+(길|로|가))/g, "$1$2");
+  console.warn(address);
   if (!address) {
     renderNearestResults(panel, "error", "주소나 장소명을 입력해 주세요.");
     input?.focus();
     return;
   }
-
-   try {
-    renderNearestResults(panel, "loading", "거리 기준으로 계산 중입니다.");
+  try {
+    renderNearestResults(panel, "loading", "계산 중입니다.");
     const origin = await geocodeAddress(address);
-    renderNearestResults(panel, "done", "거리순 가까운 주요역", getNearestByDistance(origin, 3));
+    const top5 = getNearestByDistance(origin, 5);
+    const results = await getRoutesInfo(origin, top5);
+    results.sort((a, b) => a.durationSeconds - b.durationSeconds);
+    renderNearestResults(panel, "done", "가까운 주요역", results.slice(0, 3));
   } catch (error) {
     renderNearestResults(panel, "error", error.message || "조회 중 오류가 발생했습니다.");
   }
@@ -372,39 +392,25 @@ async function searchNearestStations(panel, mode) {
 
 function bindHomeNearestPanel(panel) {
   const form = panel.querySelector("[data-nearest-form]");
-  const setActiveMode = (mode) => {
-    panel.querySelectorAll("[data-nearest-mode]").forEach((button) => {
-      button.classList.toggle("is-active", button.dataset.nearestMode === mode);
-    });
-  };
-
   form?.addEventListener("submit", (event) => {
     event.preventDefault();
-    const activeMode = panel.querySelector("[data-nearest-mode].is-active")?.dataset.nearestMode || "distance";
-    searchNearestStations(panel, activeMode);
-  });
-
-  panel.querySelectorAll("[data-nearest-mode]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const mode = button.dataset.nearestMode;
-      setActiveMode(mode);
-      searchNearestStations(panel, mode);
-    });
+    searchNearestStations(panel);
   });
 }
 
 function injectHomeNearestPanel() {
-  console.log("[Korail] injectHomeNearestPanel called");
   const existingPanel = document.getElementById(HOME_PANEL_ID);
+  console.warn("[Korail] injectHome - existing:", !!existingPanel, "miniOpen:", homePanelMiniOpen);
   if (existingPanel) {
     positionHomeNearestPanel(existingPanel);
     return;
   }
-  if (!document.querySelector("#labelstart") || !document.querySelector("#labelend")) return;
   if (document.querySelector(".tckWrap")) {
     cleanupHomeNearestPanel();
     return;
   }
+
+  const isIntroPage = location.pathname.includes("/intro");
 
   const panel = document.createElement("section");
   panel.id = HOME_PANEL_ID;
@@ -423,31 +429,107 @@ function injectHomeNearestPanel() {
           <button type="submit" class="korail-nearest-card__button">검색</button>
         </div>
       </form>
-      <div class="korail-nearest-tabs" aria-label="정렬 기준">
-      </div>
       <div class="korail-nearest-card__result" data-nearest-result aria-live="polite">
         <span class="korail-nearest-card__result-label">조회 결과</span>
         <strong>주소 입력 후 검색</strong>
-        <small>거리순은 Geocoding API, 시간순은 Routes API를 사용합니다.</small>
+        <small>거리순은 Geocoding API를 사용합니다.</small>
       </div>
     </div>
   `;
 
+  if (isIntroPage) {
+    injectIntroPanel(panel);
+  } else {
+    document.body.appendChild(panel);
+    bindHomeNearestPanel(panel);
+    positionHomeNearestPanel(panel);
+  }
+}
+
+function injectIntroPanel(panel) {
+  console.log("[Korail] injectIntroPanel called");
+  const searchBtn = document.querySelector("button.search_btn");
+  const searchSection = document.querySelector("section.search");
+  console.log("[Korail] searchBtn:", !!searchBtn, "searchSection:", !!searchSection);
+  if (!searchBtn || !searchSection) return;
+
+  const toggleBtn = document.createElement("button");
+  toggleBtn.id = "korail-intro-toggle-btn";
+  toggleBtn.textContent = "🚉 가까운 주요역 찾기";
+
+  panel.style.cssText = `
+    position: fixed;
+    z-index: 9998;
+    display: none;
+    width: 340px;
+  `;
+
   document.body.appendChild(panel);
+  document.body.appendChild(toggleBtn);
   bindHomeNearestPanel(panel);
-  positionHomeNearestPanel(panel);
+
+  function positionToggleBtn() {
+    const btnRect = searchBtn.getBoundingClientRect();
+    const sectionRect = searchSection.getBoundingClientRect();
+    //console.log("[Korail] searchBtn rect:", btnRect.left, btnRect.width, btnRect.right);
+    toggleBtn.style.cssText = `
+      position: fixed;
+      top: ${sectionRect.bottom + 8}px;
+      left: ${btnRect.left + btnRect.width / 2}px;
+      transform: translateX(-50%);
+      width: ${btnRect.width}px;
+      z-index: 9999;
+      padding: 10px 0;
+      background: #0052a4;
+      color: white;
+      border: none;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      white-space: nowrap;
+      text-align: center;
+    `;
+  }
+
+  positionToggleBtn();
+  window.addEventListener("resize", positionToggleBtn);
+
+  toggleBtn.addEventListener("click", () => {
+    const isOpen = panel.style.display !== "none";
+    if (!isOpen) {
+      const btnRect = toggleBtn.getBoundingClientRect();
+      const panelWidth = 340;
+      const panelHeight = panel.offsetHeight || 400;
+
+      const hasRightSpace = btnRect.right + panelWidth <= window.innerWidth;
+      const leftPos = hasRightSpace
+        ? btnRect.right
+        : btnRect.left - panelWidth;
+      const topPos = btnRect.bottom - panelHeight;
+
+      panel.style.top = `${topPos + window.scrollY}px`;
+      panel.style.left = `${leftPos + window.scrollX}px`;
+    }
+    panel.style.display = isOpen ? "none" : "";
+    toggleBtn.textContent = isOpen ? "🚉 가까운 주요역 찾기" : "✕ 닫기";
+  });
 }
 
 window.injectHomeFeature = injectHomeNearestPanel;
 
 function tryInit() {
-  console.log("[Korail] tckWrap:", !!document.querySelector(".tckWrap"));
-  console.log("[Korail] ticket_box:", !!document.querySelector(".ticket_box"));
-  console.log("[Korail] labelstart:", !!document.querySelector("#labelstart"));
-  console.log("[Korail] labelend:", !!document.querySelector("#labelend"));
-  console.log("[Korail] pop_slide:", !!document.querySelector(".pop_slide"));
   const depEl = document.querySelector("#labelstart");
   const arrEl = document.querySelector("#labelend");
+  const dep = depEl?.value.trim() || document.querySelector(".station_item.n1 span.input")?.textContent.trim() || "";
+  const arr = arrEl?.value.trim() || document.querySelector(".station_item.n2 span.input")?.textContent.trim() || "";
+
+  // intro 페이지 아닐 때 토글 버튼 제거
+  if (!location.pathname.includes("/intro")) {
+    document.getElementById("korail-intro-toggle-btn")?.remove();
+    //document.getElementById(HOME_PANEL_ID)?.remove();
+  }
 
   // tckWrap 없으면 패널 정리 후 종료
   if (!document.querySelector(".tckWrap")) {
@@ -459,9 +541,6 @@ function tryInit() {
   cleanupHomeNearestPanel();
 
   if (!depEl || !arrEl) return;
-
-  const dep = depEl.value.trim();
-  const arr = arrEl.value.trim();
 
   if (!dep || !arr) return;
   if (document.getElementById("korail-map-panel")) return;
@@ -486,7 +565,11 @@ function tryInit() {
   }
 }
 
-const spaObserver = new MutationObserver(() => tryInit());
+let tryInitTimer = null;
+const spaObserver = new MutationObserver(() => {
+  clearTimeout(tryInitTimer);
+  tryInitTimer = setTimeout(tryInit, 300);
+});
 spaObserver.observe(document.body, { childList: true, subtree: true });
 window.addEventListener("resize", () => {
   const panel = document.getElementById(HOME_PANEL_ID);
@@ -513,6 +596,105 @@ function injectMapPanel(dep, arr, stations, fullRoute) {
   wrapper.appendChild(panel);
 
   renderMap(panel, dep, arr, stations, fullRoute);
+  bindTrainRowClick(dep, arr, fullRoute);
+}
+
+function bindTrainRowClick(dep, arr, fullRoute) {
+  function bind() {
+    document.querySelectorAll(".tckList").forEach((row) => {
+      if (row._korailBound) return;
+      row._korailBound = true;
+      row.addEventListener("click", () => {
+        setTimeout(() => fetchTrainStations(dep, arr, fullRoute), 100);
+      });
+    });
+  }
+
+  bind();
+
+  const observer = new MutationObserver(() => bind());
+  observer.observe(document.querySelector(".tckWrap") || document.body, {
+    childList: true,
+    subtree: true,
+  });
+}
+window.fetchTrainStations = fetchTrainStations;
+
+function fetchTrainStations(dep, arr, fullRoute) {
+  console.warn("[Korail] fetchTrainStations called", dep, arr);
+  const timeBtn = document.querySelectorAll(".reserv_center a")[0];
+  console.warn("[Korail] timeBtn:", timeBtn);
+  if (!timeBtn) return;
+
+  timeBtn.click();
+
+  const observer = new MutationObserver(() => {
+    const modal = document.querySelector(".ReactModal__Content .sh-table");
+    if (!modal) return;
+    observer.disconnect();
+    //console.warn("[Korail] modal found, stations:", stationNames);
+
+    const stationNames = [...modal.querySelectorAll("li .tit")].map(el => el.textContent.trim());
+    const closeBtn = document.querySelector(".ReactModal__Content .btn_close");
+    closeBtn?.click();
+
+    const stations = stationNames
+      .filter(name => STATIONS[name])
+      .map(name => ({ name, ...STATIONS[name] }));
+
+    if (stations.length < 2) return;
+
+    const map = window._korailMapInstance;
+    if (!map) return;
+
+    map.eachLayer(layer => {
+      if (layer instanceof L.Polyline || layer instanceof L.Marker) {
+        if (!(layer instanceof L.TileLayer)) map.removeLayer(layer);
+      }
+    });
+
+    // 전체 노선 회색 라인
+    if (fullRoute) {
+      const fullCoords = fullRoute
+        .filter(name => STATIONS[name] && Number.isFinite(STATIONS[name].lat) && Number.isFinite(STATIONS[name].lng))
+        .map(name => [STATIONS[name].lat, STATIONS[name].lng]);
+      if (fullCoords.length >= 2) {
+        L.polyline(fullCoords, { color: "#cccccc", weight: 3 }).addTo(map);
+      }
+    }
+
+    const selCoords = stations.map(s => [s.lat, s.lng]);
+    if (selCoords.length >= 2) {
+      L.polyline(selCoords, { color: "#1A3A6B", weight: 4 }).addTo(map);
+    }
+
+    const selectedNames = new Set(stationNames);
+    const allRouteNames = fullRoute ? fullRoute : stationNames;
+    allRouteNames.forEach(name => {
+      if (!STATIONS[name]) return;
+      const coords = STATIONS[name];
+      if (!Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) return;
+      const isDep = name === dep;
+      const isArr = name === arr;
+      const isInRoute = selectedNames.has(name);
+      const dotClass = isDep ? "is-dep" : isArr ? "is-arr" : isInRoute ? "is-active" : "is-gray";
+      const icon = L.divIcon({
+        className: "",
+        html: `<div class="korail-dot-wrap">
+                <div class="korail-dot ${dotClass}"></div>
+                ${isDep || isArr ? `<span class="korail-dot-label ${dotClass}">${name}</span>` : ""}
+              </div>`,
+        iconAnchor: [6, 6],
+      });
+      L.marker([coords.lat, coords.lng], { icon })
+        .addTo(map)
+        .bindTooltip(name, { permanent: false, direction: "top" });
+    });
+
+    map.fitBounds(selCoords, { padding: [30, 30] });
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true });
 }
 
 function observeStationPopup() {
@@ -553,8 +735,10 @@ function showStationMapPopup(popup) {
   popup.style.maxHeight = (vh - 60) + "px";
   popup.style.overflowY = "auto";
 
-  const currentDep = document.querySelector("#labelstart")?.value.trim() || "";
-  const currentArr = document.querySelector("#labelend")?.value.trim() || "";
+  const currentDep = document.querySelector("#labelstart")?.value.trim() ||
+    document.querySelector(".station_item.n1 span.input")?.textContent.trim() || "";
+  const currentArr = document.querySelector("#labelend")?.value.trim() ||
+    document.querySelector(".station_item.n2 span.input")?.textContent.trim() || "";
 
   // 크기 설정 완료 후 지도 초기화
   setTimeout(() => {
