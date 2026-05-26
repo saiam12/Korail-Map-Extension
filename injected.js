@@ -250,7 +250,7 @@ function positionHomeNearestPanel(panel) {
     showMiniButton(bannerRect, baseRect);
     updateNearestDisabledState();
     const miniBtn = document.getElementById("korail-nearest-mini-btn");
-    const isOpen = miniBtn?.textContent.includes("닫기");
+    //const isOpen = miniBtn?.textContent.includes("닫기");
     // 공간 부족 → 패널 숨기고 미니 버튼 표시
     if (!homePanelMiniOpen) {
       panel.style.display = "none";
@@ -269,9 +269,7 @@ function positionHomeNearestPanel(panel) {
   setHomeSidePanelShift(0);
   updateNearestDisabledState();
 
-  const desiredLeft = hasRightSpace
-    ? baseRect.right + gap
-    : baseRect.left - panelWidth - gap;
+  const desiredLeft = baseRect.right + gap;
   const maxLeft = viewportWidth - panelWidth - marginX;
   const left = Math.min(Math.max(marginX, desiredLeft), maxLeft);
 
@@ -371,24 +369,6 @@ function getNaverApiConfig() {
     clientId: window.KORAIL_MAP_CONFIG?.naverClientId?.trim() || "",
     clientSecret: window.KORAIL_MAP_CONFIG?.naverClientSecret?.trim() || ""
   };
-}
-
-function normalizeGoogleApiError(message) {
-  if (message.includes("referer restrictions cannot be used")) {
-    return "Google API 키의 애플리케이션 제한을 '없음'으로 바꾸거나, 서버 프록시에서 IP 제한 키를 사용해야 합니다.";
-  }
-  if (message.includes("API key not valid")) {
-    return "Google API 키 값을 확인해 주세요.";
-  }
-  if (message.includes("REQUEST_DENIED")) {
-    return "Google API 사용 설정과 API 키 제한을 확인해 주세요.";
-  }
-  return message;
-}
-
-function buildGoogleApiError(message) {
-  const normalized = normalizeGoogleApiError(message);
-  return normalized === message ? message : `${normalized}\n원문 오류: ${message}`;
 }
 
 function escapeHtml(value) {
@@ -545,7 +525,6 @@ async function getRoutesInfo(origin, stations) {
 async function searchNearestStations(panel) {
   const input = panel.querySelector("[data-nearest-address]");
   const address = input?.value.trim().replace(/([가-힣])\s+(\d+(길|로|가))/g, "$1$2");
-  console.warn(address);
   if (!address) {
     renderNearestResults(panel, "error", "주소나 장소명을 입력해 주세요.");
     input?.focus();
@@ -609,7 +588,6 @@ function injectHomeNearestPanel() {
       <div class="korail-nearest-card__result" data-nearest-result aria-live="polite">
         <span class="korail-nearest-card__result-label">조회 결과</span>
         <strong>주소 입력 후 검색</strong>
-        <small>거리순은 Geocoding API를 사용합니다.</small>
       </div>
     </div>
   `;
@@ -714,7 +692,6 @@ function tryInit() {
   // intro 페이지 아닐 때 토글 버튼 제거
   if (!location.pathname.includes("/intro")) {
     document.getElementById("korail-intro-toggle-btn")?.remove();
-    //document.getElementById(HOME_PANEL_ID)?.remove();
   }
 
   // tckWrap 없으면 패널 정리 후 종료

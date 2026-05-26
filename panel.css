@@ -137,29 +137,6 @@
   line-height: 1;
 }
 
-.korail-nearest-tabs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.korail-nearest-tabs button {
-  min-height: 32px;
-  border: 1px solid #cbd5e1;
-  border-radius: 999px;
-  background: white;
-  color: #334155;
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.korail-nearest-tabs button.is-active {
-  border-color: #0052a4;
-  background: #e8f3ff;
-  color: #0052a4;
-}
-
 .korail-nearest-card__result {
   display: flex;
   flex-direction: column;
