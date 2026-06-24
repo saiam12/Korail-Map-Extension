@@ -1,5 +1,13 @@
 // Leaflet 지도를 패널에 렌더링합니다. 마커 호버 시 역 이름 툴팁을 표시합니다.
 
+function korailDisplayStationName(name) {
+  return window.KORAIL_I18N?.stationName?.(name) || name;
+}
+
+function korailStationKey(label) {
+  return window.KORAIL_I18N?.stationKey?.(label) || label;
+}
+
 function renderMap(container, dep, arr, stations, fullRoute) {
   try {
     window._korailMapInstance = initMap(container, dep, arr, stations, fullRoute);
@@ -62,16 +70,16 @@ function initMap(container, dep, arr, stations, fullRoute) {
       className: "",
       html: `<div class="korail-dot-wrap ${isDep || isArr ? "is-label" : ""}">
                ${isDep || isArr
-                 ? `<span class="korail-dot-label ${dotClass}">${name}</span>`
+                  ? `<span class="korail-dot-label ${dotClass}">${korailDisplayStationName(name)}</span>`
                  : `<div class="korail-dot ${dotClass}"></div>`}
               </div>`,
-      iconSize: isDep || isArr ? [0, 0] : [12, 12],
+      iconSize: isDep || isArr ? [0, 0] : [8, 8],
       iconAnchor: isDep || isArr ? [0, 0] : [6, 6],
     });
 
     L.marker([coords.lat, coords.lng], { icon })
       .addTo(map)
-      .bindTooltip(name, { permanent: false, direction: "top" });
+      .bindTooltip(korailDisplayStationName(name), { permanent: false, direction: "top" });
   });
 
   setTimeout(() => map.invalidateSize(), 100);
@@ -83,10 +91,14 @@ function renderStationMap(container, popup, currentDep, currentArr) {
 }
 
 function initStationMap(container, popup, currentDep, currentArr) {
+  currentDep = korailStationKey(currentDep);
+  currentArr = korailStationKey(currentArr);
+
   const koreaBounds = L.latLngBounds(
     L.latLng(33.5, 125.5),
     L.latLng(38.9, 130.0)
   );
+  const isEnglish = window.KORAIL_I18N?.getLocale?.() === "en";
   const map = L.map(container, {
     maxBounds: koreaBounds,
     maxBoundsViscosity: 1.0,
@@ -99,6 +111,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
 
   // 모든 역 마커 생성 (초기엔 지도에 추가 안 함)
   const markers = {};
+  let hoverMarker = null;
   Object.entries(STATIONS).forEach(([name, coords]) => {
     const isCurrentDep = name === currentDep;
     const isCurrentArr = name === currentArr;
@@ -110,18 +123,18 @@ function initStationMap(container, popup, currentDep, currentArr) {
       className: "",
       html: `<div class="korail-dot-wrap ${isCurrentDep || isCurrentArr ? "is-label" : ""}">
                ${isCurrentDep || isCurrentArr
-                 ? `<span class="korail-dot-label ${dotClass}">${name}</span>`
+                  ? `<span class="korail-dot-label ${dotClass}">${korailDisplayStationName(name)}</span>`
                  : `<div class="korail-dot ${dotClass} ${majorClass}"></div>`}
               </div>`,
-      iconSize: isCurrentDep || isCurrentArr ? [0, 0] : [12, 12],
+      iconSize: isCurrentDep || isCurrentArr ? [0, 0] : [8, 8],//12,12
       iconAnchor: isCurrentDep || isCurrentArr ? [0, 0] : [6, 6],
     });
     markers[name] = L.marker([coords.lat, coords.lng], { icon })
-      .bindTooltip(name, { permanent: false, direction: "top" })
+      .bindTooltip(korailDisplayStationName(name), { permanent: false, direction: "top" })
       .on("click", () => {
         const activeTab = popup.querySelector(".tabPage.active") || popup;
         activeTab.querySelectorAll("a").forEach((a) => {
-          if (a.textContent.trim() === name) a.click();
+          if (korailStationKey(a.textContent.trim()) === name) a.click();
         });
       });
   });
@@ -130,8 +143,17 @@ function initStationMap(container, popup, currentDep, currentArr) {
     return Object.keys(STATIONS).filter(n => STATIONS[n].major);
   }
 
+  function getVisibleStationNames() {
+    const activeTab = popup.querySelector(".tabPage.active") || popup;
+    return [...new Set([...activeTab.querySelectorAll("a")]
+      .map((a) => korailStationKey(a.textContent.trim()))
+      .filter((name) => STATIONS[name]))];
+  }
+
   function showOnlyStations(names) {
     const nameSet = new Set(names);
+    if (currentDep) nameSet.add(currentDep);
+    if (currentArr) nameSet.add(currentArr);
     Object.entries(markers).forEach(([name, marker]) => {
       if (nameSet.has(name)) {
         if (!map.hasLayer(marker)) marker.addTo(map);
@@ -142,7 +164,8 @@ function initStationMap(container, popup, currentDep, currentArr) {
   }
 
   function showMajorStations() {
-    showOnlyStations(getMajorStationNames());
+    const stationNames = isEnglish ? getVisibleStationNames() : getMajorStationNames();
+    showOnlyStations(stationNames.length ? stationNames : getMajorStationNames());
     map.flyTo([36.5, 127.8], 7, { duration: 0.5 });
   }
 
@@ -154,18 +177,42 @@ function initStationMap(container, popup, currentDep, currentArr) {
     el.classList.toggle("is-gray", !on);
   };
 
+  const showHoverMarker = (name, on) => {
+    if (!isEnglish) return;
+    if (hoverMarker) {
+      map.removeLayer(hoverMarker);
+      hoverMarker = null;
+    }
+    if (!on || !STATIONS[name]) return;
+    const coords = STATIONS[name];
+    if (!Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) return;
+
+    hoverMarker = L.circleMarker([coords.lat, coords.lng], {
+      radius: 6,
+      color: "#ffffff",
+      weight: 3,
+      fillColor: "#1A3A6B",
+      fillOpacity: 1,
+      opacity: 1,
+    }).addTo(map);
+  };
+
   function attachStationHover(stationList) {
     stationList.querySelectorAll("a").forEach((a) => {
-      const name = a.textContent.trim();
+      const name = korailStationKey(a.textContent.trim());
       if (!STATIONS[name]) return;
       if (a._korailBound) return;
       a._korailBound = true;
       a.addEventListener("mouseenter", () => {
         highlightIcon(name, true);
+        showHoverMarker(name, true);
         // 현재 줌 그대로 유지하며 위치만 이동
         map.panTo([STATIONS[name].lat, STATIONS[name].lng], { animate: true, duration: 0.4 });
       });
-      a.addEventListener("mouseleave", () => highlightIcon(name, false));
+      a.addEventListener("mouseleave", () => {
+        highlightIcon(name, false);
+        showHoverMarker(name, false);
+      });
     });
   }
 
@@ -220,12 +267,12 @@ function initStationMap(container, popup, currentDep, currentArr) {
             const coords = stationNames.map(n => [STATIONS[n].lat, STATIONS[n].lng]);
             map.flyToBounds(coords, { padding: [30, 30], duration: 0.5 });
           }
-          setTimeout(() => attachStationHover(stationList), 150);
+          setTimeout(() => attachStationHover(activeTab), 150);
         });
       });
 
       //attachRegionHover(regionList);
-      attachStationHover(stationList);
+      attachStationHover(activeTab);
 
     } else {
       // 주요역 탭
@@ -238,15 +285,19 @@ function initStationMap(container, popup, currentDep, currentArr) {
       });
 
       activeTab.querySelectorAll("a").forEach((a) => {
-        const name = a.textContent.trim();
+        const name = korailStationKey(a.textContent.trim());
         if (!STATIONS[name]) return;
         if (a._korailBound) return;
         a._korailBound = true;
         a.addEventListener("mouseenter", () => {
           highlightIcon(name, true);
+          showHoverMarker(name, true);
           map.panTo([STATIONS[name].lat, STATIONS[name].lng], { animate: true, duration: 0.4 });
         });
-        a.addEventListener("mouseleave", () => highlightIcon(name, false));
+        a.addEventListener("mouseleave", () => {
+          highlightIcon(name, false);
+          showHoverMarker(name, false);
+        });
       });
     }
   }
