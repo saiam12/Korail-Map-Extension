@@ -71,10 +71,10 @@ function initMap(container, dep, arr, stations, fullRoute) {
       html: `<div class="korail-dot-wrap ${isDep || isArr ? "is-label" : ""}">
                ${isDep || isArr
                   ? `<span class="korail-dot-label ${dotClass}">${korailDisplayStationName(name)}</span>`
-                 : `<div class="korail-dot ${dotClass}"></div>`}
+                 : `<div class="korail-dot> ${dotClass}"></div>`}
               </div>`,
-      iconSize: isDep || isArr ? [0, 0] : [8, 8],
-      iconAnchor: isDep || isArr ? [0, 0] : [6, 6],
+      iconSize: isDep || isArr ? [0, 0] : [11, 11],
+      iconAnchor: isDep || isArr ? [0, 0] : [5.5, 5.5],
     });
 
     L.marker([coords.lat, coords.lng], { icon })

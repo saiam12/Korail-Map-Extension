@@ -1,6 +1,6 @@
 // content.js는 페이지 컨텍스트에 나머지 스크립트를 순서대로 주입하는 역할만 합니다.
 
-const FILES = ["leaflet.js", "station-data.js", "map-panel.js", "api-config.js", "injected.js"];
+const FILES = ["leaflet.js", "station-data.js", "map-panel.js", "api-config.js", "injected-core.js", "home-panel.js", "station-popup.js", "booking-map.js"];
 
 window.addEventListener("message", async (event) => {
   if (event.source !== window) return;

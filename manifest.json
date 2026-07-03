@@ -29,6 +29,10 @@
         "station-data.js",
         "map-panel.js",
         "api-config.js",
+        "injected-core.js",
+        "home-panel.js",
+        "station-popup.js",
+        "booking-map.js",
         "injected.js"
       ],
       "matches": ["https://www.korail.com/*"]
