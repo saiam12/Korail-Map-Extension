@@ -46,9 +46,9 @@ waitForL(() => {
       minute: "분",
     },
     en: {
-      nearestTitle: "Find Nearby Major Stations",
+      nearestTitle: "Find Nearby Stations",
       currentLocation: "Based on current location",
-      nearestDescription: "Enter an address to find the top 3 nearby major KTX stations.",
+      nearestDescription: "Enter an address to find nearby major KTX stations.",
       departureLocation: "Departure location",
       addressPlaceholder: "e.g. Seoul City Hall, Suseong-gu Daegu",
       search: "Search",
@@ -71,67 +71,22 @@ waitForL(() => {
     },
   };
 
-  const STATION_EN = {
-    "서울": "Seoul",
-    "용산": "Yongsan",
-    "광명": "Gwangmyeong",
-    "수서": "Suseo",
-    "영등포": "Yeongdeungpo",
-    "수원": "Suwon",
-    "평택": "Pyeongtaek",
-    "평택지제": "PyeongtaekJije",
-    "천안아산": "CheonanAsan",
-    "천안": "Cheonan",
-    "오송": "Osong",
-    "조치원": "Jochiwon",
-    "대전": "Daejeon",
-    "서대전": "Seodaejeon",
-    "김천": "Gimcheon",
-    "김천구미": "Gimcheon Gumi",
-    "구미": "Gumi",
-    "동대구": "Dongdaegu",
-    "대구": "Daegu",
-    "서대구": "Seodaegu",
-    "경주": "Gyeongju",
-    "울산(통도사)": "Ulsan",
-    "태화강": "Taehwagang",
-    "포항": "Pohang",
-    "경산": "Gyeongsan",
-    "밀양": "Miryang",
-    "부산": "Busan",
-    "구포": "Gupo",
-    "창원중앙": "ChangwonJungang",
-    "마산": "Masan",
-    "진주": "Jinju",
-    "평창": "Pyeongchang",
-    "진부(오대산)": "Jinbu",
-    "강릉": "Gangneung",
-    "익산": "Iksan",
-    "논산": "Nonsan",
-    "전주": "Jeonju",
-    "광주송정": "Gwangjusongjeong",
-    "목포": "Mokpo",
-    "대천": "Daecheon",
-    "순천": "Suncheon",
-    "청량리": "Cheongnyangni",
-    "제천": "Jecheon",
-    "여수EXPO": "Yeosu-Expo",
-    "동해": "Donghae",
-    "정동진": "Jeongdongjin",
-    "춘천": "Chuncheon",
-    "남춘천": "Namchuncheon",
-    "부전": "Bujeon",
-    "신탄진": "Sintanjin",
-    "영동": "Yeongdong",
-    "왜관": "Waegwan",
-    "홍성": "Hongseong",
-    "안동": "Andong",
-    "서원주": "Seowonju",
-    "원주": "Wonju",
-    "행신": "Haengsin",
-    "나주": "Naju",
-    "정읍": "Jeongeup",
-    "남원": "Namwon",
+  TEXT.ko.useCurrentLocation = "내 위치";
+  TEXT.ko.locating = "위치 확인 중…";
+  TEXT.ko.locationUnavailable = "현재 위치를 가져올 수 없습니다. 위치 권한을 확인해주세요.";
+  TEXT.en.useCurrentLocation = "My location";
+  TEXT.en.locating = "Locating…";
+  TEXT.en.locationUnavailable = "Unable to get your current location. Check location permission.";
+
+  const stationTranslationModule = window.KORAIL_STATION_TRANSLATIONS || {};
+  const STATION_TRANSLATIONS = stationTranslationModule.STATION_TRANSLATIONS || {};
+  const getStationTranslationMap = stationTranslationModule.getStationTranslationMap || ((locale) => STATION_TRANSLATIONS[locale] || {});
+  const STATION_EN = getStationTranslationMap("en", STATIONS);
+  const STATION_DISPLAY_NAMES = {
+    en: STATION_EN,
+    jpn: getStationTranslationMap("jpn", STATIONS),
+    chn: getStationTranslationMap("chn", STATIONS),
+    tw: STATION_EN,
   };
   // 역명 비교를 위해 공백, 괄호, station 표기를 정규화합니다.
   function normalizeStationLabel(label) {
@@ -139,18 +94,34 @@ waitForL(() => {
       .trim()
       .toLowerCase()
       .replace(/\bstation\b/g, "")
+      .replace(/(エキスポ|世界博览会|世界博覽會)/g, "expo")
+      .replace(/乌致院/g, "鸟致院")
+      .replace(/京山/g, "庆山")
+      .replace(/松亭/g, "松汀")
+      .replace(/[龜龟]/g, "亀")
+      .replace(/(车站|車站|역|駅|站)/g, "")
       .replace(/[\s\-()]/g, "");
   }
 
+  const STATION_KEY_BY_LABEL = Object.fromEntries(
+    [
+      ...Object.keys(STATIONS).map((name) => [name, name]),
+      ...Object.values(STATION_DISPLAY_NAMES).flatMap((map) => Object.entries(map || {})),
+    ]
+      .map(([ko, label]) => [normalizeStationLabel(label), ko])
+  );
   const STATION_KEY_BY_EN = Object.fromEntries(
     Object.entries(STATION_EN).map(([ko, en]) => [normalizeStationLabel(en), ko])
   );
 
-  // 현재 페이지 언어를 감지해 ko 또는 en을 반환합니다.
+  // 현재 페이지 언어를 감지합니다. UI 문구가 없는 언어는 영어 문구를 fallback으로 사용합니다.
 
   function getKorailLocale() {
     const path = location.pathname.toLowerCase();
-    if (path.includes("/global/eng/")) return "en";
+    if (path.includes("/global/jpn/")) return "jpn";
+    if (path.includes("/global/chn/")) return "chn";
+    if (path.includes("/global/tw/")) return "tw";
+    if (/\/global\/(eng|vi|th|id)\//.test(path)) return "en";
 
     const lang = document.documentElement.lang?.toLowerCase() || "";
     if (lang.startsWith("en")) return "en";
@@ -164,13 +135,15 @@ waitForL(() => {
 
   function t(key) {
     const locale = getKorailLocale();
-    return TEXT[locale]?.[key] || TEXT.ko[key] || key;
+    return TEXT[locale]?.[key] || TEXT.en[key] || TEXT.ko[key] || key;
   }
 
   // 현재 언어에 맞는 역 표시명을 반환합니다.
 
   function stationName(name) {
-    return getKorailLocale() === "en" ? (STATION_EN[name] || name) : name;
+    const locale = getKorailLocale();
+    if (locale === "ko") return name;
+    return STATION_DISPLAY_NAMES[locale]?.[name] || STATION_EN[name] || name;
   }
 
   // 영문 또는 표시 역명을 내부 한글 역 키로 변환합니다.
@@ -178,7 +151,7 @@ waitForL(() => {
   function stationKey(label) {
     const clean = (label || "").trim();
     if (STATIONS[clean]) return clean;
-    return STATION_KEY_BY_EN[normalizeStationLabel(clean)] || clean;
+    return STATION_KEY_BY_LABEL[normalizeStationLabel(clean)] || clean;
   }
 
   // 문장 안에서 알려진 역명을 찾아 내부 역 키로 반환합니다.
@@ -195,9 +168,10 @@ waitForL(() => {
     if (koMatch) return koMatch;
 
     const normalized = normalizeStationLabel(value);
-    return Object.entries(STATION_EN)
-      .map(([name, en]) => {
-        const key = normalizeStationLabel(en);
+    return Object.values(STATION_DISPLAY_NAMES)
+      .flatMap((map) => Object.entries(map || {}))
+      .map(([name, label]) => {
+        const key = normalizeStationLabel(label);
         const index = normalized.lastIndexOf(key);
         return { name, index, end: index + key.length };
       })
@@ -237,8 +211,11 @@ waitForL(() => {
     HOME_PANEL_ID,
     QUICK_MENU_TEXTS,
     TEXT,
+    STATION_TRANSLATIONS,
     STATION_EN,
+    STATION_DISPLAY_NAMES,
     STATION_KEY_BY_EN,
+    STATION_KEY_BY_LABEL,
     normalizeStationLabel,
     getKorailLocale,
     t,

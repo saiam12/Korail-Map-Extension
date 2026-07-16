@@ -41,6 +41,11 @@ waitForL(() => {
         .some((el) => ((el.textContent || el.value || "").trim() === "로그인"));
   }
 
+  function isNearestPanelPage() {
+    const path = location.pathname.replace(/\/+$/, "");
+    return path === "/ticket/main" || path.includes("/intro") || isGlobalMainPage();
+  }
+
   // 예매 옵션 팝업이 열려 있는지 확인합니다.
 
   function isBookingOptionPopupOpen() {
@@ -66,15 +71,62 @@ waitForL(() => {
       });
   }
 
+  function isAdBannerPopupOpen() {
+    const visibleTexts = [...document.querySelectorAll("button, a, label, span, p, strong")]
+      .filter((el) => {
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return rect.width > 0
+          && rect.height > 0
+          && style.display !== "none"
+          && style.visibility !== "hidden";
+      })
+      .map((el) => (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase());
+
+    const hasDismissControl = visibleTexts.some((text) =>
+      text.includes("1일간 그만보기")
+      || text.includes("오늘 하루 보지 않기")
+      || text.includes("하루 동안 보지 않기")
+      || text.includes("don't show again today")
+      || text.includes("do not show again today")
+    );
+    const hasAdButtons = visibleTexts.some((text) => text === "view details")
+      && visibleTexts.some((text) => text === "창닫기" || text === "close");
+    return hasDismissControl || hasAdButtons;
+  }
+
+  function isNearestBlockingPopupOpen() {
+    return isBookingOptionPopupOpen() || isAdBannerPopupOpen();
+  }
+
+  function isGlobalMainPage() {
+    return /\/global\/(eng|jpn|chn|tw|vi|th|id)\/main/i.test(location.pathname);
+  }
+
+  function isKoreanLocale() {
+    return getKorailLocale() === "ko";
+  }
+
+  function getRequestLanguage() {
+    return ({
+      ko: "ko",
+      en: "en",
+      jpn: "ja",
+      chn: "zh-CN",
+      tw: "zh-TW",
+    })[getKorailLocale()] || "en";
+  }
+
   // 가까운 역 버튼의 비활성 상태를 현재 화면에 맞게 갱신합니다.
 
   function updateNearestDisabledState() {
-    const disabled = isBookingOptionPopupOpen();
+    const disabled = isNearestBlockingPopupOpen();
     [
       document.getElementById(HOME_PANEL_ID),
       document.getElementById("korail-nearest-mini-btn"),
       document.getElementById("korail-intro-toggle-btn"),
       document.getElementById("korail-main-toggle-btn"),
+      document.getElementById("korail-main-toggle-host"),
     ].forEach((el) => {
       if (el) el.classList.toggle("is-korail-muted", disabled);
     });
@@ -198,7 +250,7 @@ waitForL(() => {
 
   function positionHomeNearestPanel(panel) {
     if (location.pathname.includes("/intro")) return;
-    const rect = findHomeQuickMenu();
+    const rect = findHomeQuickMenu() || getHomeSidePanel()?.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const gap = Math.max(5, viewportWidth * 0.009);
     const marginX = Math.max(5, viewportWidth * 0.005);
@@ -303,12 +355,13 @@ waitForL(() => {
     const panelHeight = Math.min(panel.offsetHeight || 400, window.innerHeight - margin * 2);
     const isMainToggle = toggleBtn.id === "korail-main-toggle-btn";
     if (isMainToggle) {
-      const desiredLeft = btnRect.right + gap;
+      const verticalGap = 12;
+      const desiredLeft = btnRect.right - panelWidth;
       const leftPos = Math.min(
         Math.max(margin, desiredLeft),
         Math.max(margin, window.innerWidth - panelWidth - margin),
       );
-      const desiredTop = btnRect.bottom - panelHeight;
+      const desiredTop = btnRect.top - panelHeight - verticalGap;
       const topPos = Math.max(margin, desiredTop);
 
       panel.style.position = "absolute";
@@ -637,10 +690,10 @@ waitForL(() => {
 
   function formatDuration(seconds) {
     const minutes = Math.round(seconds / 60);
-    if (minutes < 60) return getKorailLocale() === "en" ? `${minutes} ${t("minute")}` : `${minutes}분`;
+    if (minutes < 60) return isKoreanLocale() ? `${minutes}분` : `${minutes} ${t("minute")}`;
     const hours = Math.floor(minutes / 60);
     const remain = minutes % 60;
-    if (getKorailLocale() === "en") return remain ? `${hours} ${t("hour")} ${remain} ${t("minute")}` : `${hours} ${t("hour")}`;
+    if (!isKoreanLocale()) return remain ? `${hours} ${t("hour")} ${remain} ${t("minute")}` : `${hours} ${t("hour")}`;
     return remain ? `${hours}시간 ${remain}분` : `${hours}시간`;
   }
 
@@ -688,11 +741,57 @@ waitForL(() => {
 
   async function geocodeAddress(address) {
     const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=kr`;
-    const response = await fetch(url, { headers: { "Accept-Language": getKorailLocale(), "User-Agent": "KorailMapExtension/1.0" } });
+    const response = await fetch(url, { headers: { "Accept-Language": getRequestLanguage(), "User-Agent": "KorailMapExtension/1.0" } });
     if (!response.ok) throw new Error(`${t("geocodeFailed")}: ${response.status}`);
     const data = await response.json();
     if (!data[0]) throw new Error(t("geocodeNotFound"));
     return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+  }
+
+  function requestCurrentLocation() {
+    const requestId = `korail-location-${Date.now()}-${Math.random()}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        window.removeEventListener("message", handler);
+        reject(new Error("Location request timed out."));
+      }, 12000);
+      const handler = (event) => {
+        if (event.source !== window || event.data?.type !== "KORAIL_CURRENT_LOCATION_RESPONSE" || event.data.requestId !== requestId) return;
+        clearTimeout(timer);
+        window.removeEventListener("message", handler);
+        event.data.ok ? resolve(event.data.data) : reject(new Error(event.data.error || "Location request failed."));
+      };
+      window.addEventListener("message", handler);
+      window.postMessage({ type: "KORAIL_CURRENT_LOCATION_REQUEST", requestId }, "*");
+    });
+  }
+
+  async function reverseGeocodeLocation({ lat, lng }) {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&format=json&zoom=18`;
+    const response = await fetch(url, { headers: { "Accept-Language": getRequestLanguage(), "User-Agent": "KorailMapExtension/1.0" } });
+    if (!response.ok) throw new Error(`${t("geocodeFailed")}: ${response.status}`);
+    const data = await response.json();
+    if (!data.display_name) throw new Error(t("geocodeNotFound"));
+    return data.display_name;
+  }
+
+  async function fillCurrentLocation(panel) {
+    const input = panel.querySelector("[data-nearest-address]");
+    const button = panel.querySelector("[data-nearest-current-location]");
+    if (!input || !button) return;
+
+    button.disabled = true;
+    button.querySelector("[data-nearest-location-label]").textContent = t("locating");
+    try {
+      const address = await reverseGeocodeLocation(await requestCurrentLocation());
+      input.value = address;
+      input.focus();
+    } catch (error) {
+      renderNearestResults(panel, "error", t("locationUnavailable"));
+    } finally {
+      button.disabled = false;
+      button.querySelector("[data-nearest-location-label]").textContent = t("useCurrentLocation");
+    }
   }
 
   // 현재 위치에서 가까운 주요 역을 거리순으로 고릅니다.
@@ -795,6 +894,7 @@ waitForL(() => {
       event.preventDefault();
       searchNearestStations(panel);
     });
+    panel.querySelector("[data-nearest-current-location]")?.addEventListener("click", () => fillCurrentLocation(panel));
   }
 
   // 가까운 역 패널의 기본 HTML을 렌더링합니다.
@@ -815,11 +915,14 @@ waitForL(() => {
             <input id="korail-nearest-address" data-nearest-address type="text" placeholder="${t("addressPlaceholder")}" autocomplete="street-address">
             <button type="submit" class="korail-nearest-card__button">${t("search")}</button>
           </div>
-          <label class="korail-nearest-search__toggle">
-            <input data-nearest-include-all type="checkbox">
-            <span class="korail-nearest-search__switch" aria-hidden="true"></span>
-            <span>${t("includeAllStations")}</span>
-          </label>
+          <div class="korail-nearest-search__options">
+            <label class="korail-nearest-search__toggle">
+              <input data-nearest-include-all type="checkbox">
+              <span class="korail-nearest-search__switch" aria-hidden="true"></span>
+              <span>${t("includeAllStations")}</span>
+            </label>
+            <button type="button" class="korail-nearest-location-button" data-nearest-current-location><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg><span data-nearest-location-label>${t("useCurrentLocation")}</span></button>
+          </div>
         </form>
         <div class="korail-nearest-card__result" data-nearest-result aria-live="polite">
           <span class="korail-nearest-card__result-label">${t("result")}</span>
@@ -833,13 +936,13 @@ waitForL(() => {
   // 홈 화면에 가까운 주요역 패널을 삽입합니다.
 
   function injectHomeNearestPanel() {
-    if (isLoginPage()) {
+    if (isLoginPage() || !isNearestPanelPage()) {
       cleanupHomeNearestPanel();
       return;
     }
 
     const isIntroPage = location.pathname.includes("/intro");
-    const isButtonOnlyMain = location.pathname.includes("/main") && getKorailLocale() !== "ko";
+    const isButtonOnlyMain = isGlobalMainPage();
     const existingPanel = document.getElementById(HOME_PANEL_ID);
     if (existingPanel && isButtonOnlyMain && !document.getElementById("korail-main-toggle-btn")) {
       cleanupHomeNearestPanel();
@@ -988,12 +1091,12 @@ waitForL(() => {
       const arrivalBtn = controls?.arrival || null;
       const lookupBtn = controls?.lookup || null;
       const fallbackSearchBtn = lookupBtn || findIntroSearchButton();
-      const toggleWidth = 210;
       const toggleHeight = 42;
 
       const arrivalRect = arrivalBtn?.getBoundingClientRect();
       const lookupRect = lookupBtn?.getBoundingClientRect();
       const fallbackRect = fallbackSearchBtn?.getBoundingClientRect();
+      const toggleWidth = Math.max(120, Math.round((lookupRect || fallbackRect)?.width || 210));
       const yRect = arrivalRect
         ? {
           top: arrivalRect.top + window.scrollY,
@@ -1110,7 +1213,7 @@ waitForL(() => {
 
   window.injectHomeFeature = injectHomeNearestPanel;
   
-  // 날짜/인원 선택 팝업 열림·닫힘을 직접 감지해 nearest 패널 z-index를 즉시 조정합니다.
+  // 날짜/인원 선택 및 광고 팝업 열림·닫힘을 감지해 nearest 패널을 즉시 비활성화합니다.
     
     
   function setNearestPanelZIndex(behind) {
@@ -1118,23 +1221,38 @@ waitForL(() => {
       document.getElementById(HOME_PANEL_ID),
       document.getElementById("korail-nearest-mini-btn"),
       document.getElementById("korail-intro-toggle-btn"),
+      document.getElementById("korail-main-toggle-btn"),
+      document.getElementById("korail-main-toggle-host"),
     ].forEach((el) => {
       if (el) el.style.zIndex = behind ? "0" : "";
     });
   }
   
   function observeBookingOptionPopup() {
-    let wasOpen = false;
-    const observer = new MutationObserver(() => {
-      const isOpen = isBookingOptionPopupOpen();
+    let wasOpen = null;
+    let syncScheduled = false;
+    const syncPopupState = () => {
+      const isOpen = isNearestBlockingPopupOpen();
       if (isOpen === wasOpen) return;
       wasOpen = isOpen;
       setNearestPanelZIndex(isOpen);
+      updateNearestDisabledState();
+    };
+    const observer = new MutationObserver(() => {
+      if (syncScheduled) return;
+      syncScheduled = true;
+      requestAnimationFrame(() => {
+        syncScheduled = false;
+        syncPopupState();
+      });
     });
     observer.observe(document.body, {
       childList: true,
       subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "style", "aria-hidden"],
     });
+    syncPopupState();
   }
   
   observeBookingOptionPopup();

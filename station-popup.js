@@ -9,8 +9,13 @@ waitForL(() => {
     const panel = document.getElementById(HOME_PANEL_ID);
     const miniBtn = document.getElementById("korail-nearest-mini-btn");
     const introBtn = document.getElementById("korail-intro-toggle-btn");
-    [panel, miniBtn, introBtn].forEach((el) => {
-      if (el) el.style.zIndex = behind ? "0" : "";
+    const mainBtn = document.getElementById("korail-main-toggle-btn");
+    const mainHost = document.getElementById("korail-main-toggle-host");
+    [panel, miniBtn, introBtn, mainBtn, mainHost].forEach((el) => {
+      if (!el) return;
+      el.style.zIndex = behind ? "0" : "";
+      el.classList.toggle("is-korail-muted", behind);
+      el.setAttribute("aria-hidden", behind ? "true" : "false");
     });
   }
 

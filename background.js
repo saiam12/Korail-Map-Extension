@@ -1,5 +1,14 @@
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (!request || request.type !== "KORAIL_MAP_API_REQUEST") return false;
+  if (!request) return false;
+
+  if (request.type === "KORAIL_SUPPORT_SUBMIT") {
+    handleSupportSubmit(request)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error.message || "Feedback submission failed." }));
+    return true;
+  }
+
+  if (request.type !== "KORAIL_MAP_API_REQUEST") return false;
 
   console.info("[Korail Map] API request received:", request.kind);
   handleNaverApiRequest(request)
@@ -14,6 +23,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   return true;
 });
+
+async function handleSupportSubmit(request) {
+  const endpoint = new URL(request.endpoint || "");
+  if (endpoint.protocol !== "https:" || endpoint.hostname !== "formspree.io") {
+    throw new Error("Invalid feedback endpoint.");
+  }
+
+  const response = await fetch(endpoint.href, {
+    method: "POST",
+    headers: {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request.payload || {}),
+  });
+  if (!response.ok) throw new Error(`Feedback submission failed: ${response.status}`);
+}
 
 async function handleNaverApiRequest(request) {
   console.warn("[Korail Map] request:", {

@@ -4,7 +4,7 @@
   gap: 16px;
 }
 
-#korail-map-wrapper > .tckWrap {
+#korail-map-wrapper > :first-child {
   flex: 1 1 auto;
 }
 
@@ -31,8 +31,12 @@
 
 #korail-nearest-station-panel.is-korail-muted,
 #korail-nearest-mini-btn.is-korail-muted,
-#korail-intro-toggle-btn.is-korail-muted {
-  z-index: 5 !important;
+#korail-intro-toggle-btn.is-korail-muted,
+#korail-main-toggle-btn.is-korail-muted,
+#korail-main-toggle-host.is-korail-muted {
+  z-index: 0 !important;
+  pointer-events: none !important;
+  user-select: none;
 }
 
 .korail-nearest-card {
@@ -134,6 +138,42 @@
 .korail-nearest-search input:focus {
   border-color: #0052a4;
   box-shadow: 0 0 0 3px rgba(0,82,164,0.14);
+}
+
+.korail-nearest-location-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #0052a4;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.korail-nearest-location-button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.korail-nearest-location-button:hover { text-decoration: underline; }
+.korail-nearest-location-button:disabled { cursor: wait; opacity: 0.72; }
+
+.korail-nearest-search__options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(58px, 4.4vw);
+  align-items: center;
+}
+
+.korail-nearest-search__options .korail-nearest-location-button {
+  justify-self: center;
 }
 
 .korail-nearest-search__toggle {
@@ -330,16 +370,16 @@
 
 /* 주요역 (기존 스타일 유지) */
 .korail-dot.is-major {
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
 }
 
 .korail-dot.is-transfer {
-  width: 15px;
-  height: 15px;
-  background: #1A3A6B;
+  width: 13px;
+  height: 13px;
+  /* background: #1A3A6B;
   border: 0;
-  box-shadow: 0 1px 5px rgba(0,0,0,0.35);
+  box-shadow: 0 1px 5px rgba(0,0,0,0.35); */
 }
 
 /* 점 마커 기본 */
@@ -401,4 +441,60 @@
   overflow: hidden;
   z-index: 9999;
   box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+#korail-support-launcher {
+  position: fixed;
+  right: 1.25vw;
+  bottom: 1.25vw;
+  z-index: 9998;
+  display: grid;
+  place-items: center;
+  width: 2.7vw;
+  height: 2.7vw;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #0054A6;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+}
+
+#korail-support-launcher:hover { background: #003f7e; }
+#korail-support-launcher:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+#korail-support-launcher svg { width: 52%; height: 52%; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linejoin: round; }
+
+#korail-support-modal[hidden] { display: none; }
+#korail-support-modal { position: fixed; inset: 0; z-index: 10001; pointer-events: none; font-family: inherit; }
+.korail-support-modal__backdrop { display: none; }
+.korail-support-modal__dialog { position: absolute; right: 4.575vw; bottom: 1.25vw; width: min(calc(100vw - 32px), 340px); padding: 20px 22px 16px; box-sizing: border-box; border-radius: 18px; background: #fff; color: #171717; pointer-events: auto; box-shadow: 0 18px 46px rgba(0, 0, 0, 0.28); }
+.korail-support-modal__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.korail-support-modal__head h2 { margin: 0; font-size: 21px; }
+.korail-support-modal__close { width: 34px; height: 34px; border: 0; background: transparent; color: #444; font-size: 30px; line-height: 1; cursor: pointer; }
+.korail-support-choice { display: grid; gap: 12px; margin-top: 13px; }
+.korail-support-choice__notice { margin: -4px 0 2px; color: #4b5563; font-size: 13px; line-height: 1.45; white-space: pre-line; }
+.korail-support-choice__item { display: grid; gap: 5px; width: 100%; padding: 18px; border: 1px solid #d1d5db; border-radius: 14px; background: #fff; color: #111827; text-align: left; cursor: pointer; }
+.korail-support-choice__item:hover { border-color: #d0021b; background: #fff7f8; }
+.korail-support-choice__item strong { font-size: 16px; }
+.korail-support-choice__item span { color: #6b7280; font-size: 13px; }
+.korail-support-back { margin-top: 18px; padding: 0; border: 0; background: transparent; color: #4b5563; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.korail-support-inquiry { margin-top: 10px; }
+.korail-support-inquiry__back { justify-self: start; margin: 0; text-align: left; }
+.korail-support-form { display: grid; gap: 16px; }
+.korail-support-form__notice, .korail-support-form__privacy { margin: 0; color: #6b7280; font-size: 14px; line-height: 1.5; }
+.korail-support-form label { display: grid; gap: 7px; color: #374151; font-size: 14px; font-weight: 700; }
+.korail-support-form select, .korail-support-form textarea, .korail-support-form input { width: 100%; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 10px; padding: 11px 12px; color: #111827; font: inherit; }
+.korail-support-form textarea { min-height: 132px; resize: vertical; }
+.korail-support-form select:focus, .korail-support-form textarea:focus, .korail-support-form input:focus { outline: 0; border-color: #d0021b; box-shadow: 0 0 0 3px rgba(208, 2, 27, 0.12); }
+.korail-support-form__actions { display: flex; justify-content: flex-end; gap: 8px; }
+.korail-support-form__actions button { min-height: 40px; border-radius: 999px; padding: 0 17px; font: inherit; font-weight: 700; cursor: pointer; }
+.korail-support-modal__cancel { border: 1px solid #d1d5db; background: #fff; color: #374151; }
+.korail-support-form__submit { border: 1px solid #d0021b; background: #d0021b; color: #fff; }
+.korail-support-form__submit:disabled { opacity: 0.55; cursor: wait; }
+.korail-support-form__status { min-height: 0; margin: -6px 0 0; color: #4b5563; font-size: 13px; }
+
+@media (max-width: 600px) {
+  #korail-support-launcher { right: 16px; bottom: 16px; width: 48px; height: 48px; }
+  .korail-support-modal__dialog { right: 16px; bottom: 76px; padding: 18px 20px 14px; }
 }

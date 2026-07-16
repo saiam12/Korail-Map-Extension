@@ -1,15 +1,56 @@
 // 예매 결과 지도와 선택 열차 정차역 표시 기능입니다.
 
 waitForL(() => {
-  const { HOME_PANEL_ID, stationName, stationKey, findStationKeyInText } = window.KORAIL_SHARED;
+  const { HOME_PANEL_ID, stationName, stationKey, findStationKeyInText, getCurrentStationKey } = window.KORAIL_SHARED;
   const { cleanup, cleanupHomeNearestPanel, isLoginPage, updateNearestDisabledState, positionHomeNearestPanel, injectHomeNearestPanel } = window.KORAIL_HOME;
 
   var isFetchingTrainStations = false;
+  var activeTrainStationsRequestVersion = -1;
+  var pendingTrainStationsRequest = null;
   var bottomTrainTimeTimer = null;
   var selectedTrainRow = null;
+  var selectedTrainSegment = null;
   var selectedTrainRowVersion = 0;
   var selectedTransferRouteKey = "";
   var selectedTransferRouteGroups = new Map();
+
+function isGlobalTrainRow(el) {
+  const text = (el?.textContent || "").replace(/\s+/g, " ");
+  const hasRouteAndTime = text.includes("→") && (text.match(/\b\d{1,2}:\d{2}\b/g) || []).length >= 2;
+  return hasRouteAndTime && ![...el.children].some((child) => isGlobalTrainRow(child));
+}
+
+function getGlobalTrainRows(root = document) {
+  if (!location.pathname.includes("/global/")) return [];
+  return [...root.querySelectorAll("li, tr, div")].filter(isGlobalTrainRow);
+}
+
+function getGlobalTrainTable() {
+  const rows = getGlobalTrainRows();
+  if (!rows.length) return null;
+
+  let table = rows[0].parentElement;
+  while (table && !table.contains(rows[1] || rows[0])) table = table.parentElement;
+  return table;
+}
+
+function getTrainTable() {
+  return document.querySelector(".tckWrap") || getGlobalTrainTable();
+}
+
+function isGlobalTicketPage() {
+  return location.pathname.includes("/global/");
+}
+
+const TRAIN_TIME_LABELS = [
+  "열차시각", "Train Time", "Time", "列車時刻", "列车时刻", "時刻",
+  "Giờ tàu", "Giờ khởi hành", "ตารางเวลา", "เวลาเดินรถ", "Jadwal Kereta", "Waktu Kereta",
+];
+
+function isTrainTimeButton(el) {
+  const text = (el?.textContent || el?.getAttribute?.("aria-label") || "").trim().toLocaleLowerCase();
+  return TRAIN_TIME_LABELS.some((label) => text.includes(label.toLocaleLowerCase()));
+}
 
 // 현재 페이지 상태에 맞춰 홈 패널 또는 예매 지도 패널을 초기화합니다.
 
@@ -20,18 +61,20 @@ function tryInit() {
     return;
   }
 
+  const trainTable = getTrainTable();
   const depEl = document.querySelector("#labelstart");
   const arrEl = document.querySelector("#labelend");
-  const dep = stationKey(depEl?.value.trim() || document.querySelector(".station_item.n1 span.input")?.textContent.trim() || "");
-  const arr = stationKey(arrEl?.value.trim() || document.querySelector(".station_item.n2 span.input")?.textContent.trim() || "");
+  const displayedSegment = getTrainRowSegment(trainTable);
+  const dep = stationKey(depEl?.value.trim() || getCurrentStationKey("dep") || displayedSegment?.dep || "");
+  const arr = stationKey(arrEl?.value.trim() || getCurrentStationKey("arr") || displayedSegment?.arr || "");
 
   // intro 페이지 아닐 때 토글 버튼 제거
   if (!location.pathname.includes("/intro")) {
     document.getElementById("korail-intro-toggle-btn")?.remove();
   }
 
-  // tckWrap 없으면 패널 정리 후 종료
-  if (!document.querySelector(".tckWrap")) {
+  // 열차 결과가 없으면 패널 정리 후 종료
+  if (!trainTable) {
     cleanup();
     injectHomeNearestPanel();
     return;
@@ -39,11 +82,8 @@ function tryInit() {
 
   cleanupHomeNearestPanel();
 
-  if (!depEl || !arrEl) return;
-
   if (!dep || !arr) return;
   if (document.getElementById("korail-map-panel")) return;
-  if (!document.querySelector(".tckWrap")) return;
 
   const result = findRoute(dep, arr);
 
@@ -87,6 +127,15 @@ window.addEventListener("resize", () => {
   if (panel) positionHomeNearestPanel(panel);
   updateNearestDisabledState();
 });
+let homePanelScrollFrame = null;
+window.addEventListener("scroll", () => {
+  if (homePanelScrollFrame !== null) return;
+  homePanelScrollFrame = requestAnimationFrame(() => {
+    homePanelScrollFrame = null;
+    const panel = document.getElementById(HOME_PANEL_ID);
+    if (panel) positionHomeNearestPanel(panel);
+  });
+}, { passive: true });
 tryInit();
 
 
@@ -94,7 +143,7 @@ tryInit();
 
 
 function injectMapPanel(dep, arr, stations, fullRoute) {
-  const trainTable = document.querySelector(".tckWrap");
+  const trainTable = getTrainTable();
   if (!trainTable) return;
   if (document.getElementById("korail-map-panel")) return;
   if (!stations.some((station) => Number.isFinite(station.lat) && Number.isFinite(station.lng))) return;
@@ -142,14 +191,23 @@ function findBottomBarContainer() {
 
 function bindTrainRowClick(dep, arr) {
   let lastBottomBarKey = "";
-  const trainTable = document.querySelector(".tckWrap");
+  const trainTable = getTrainTable();
   if (trainTable && !trainTable.dataset.korailBound) {
     trainTable.dataset.korailBound = "1";
     trainTable.addEventListener("click", (event) => {
-      const clickedRow = event.target.closest(".tckList");
+      const clickedRow = event.target.closest(".tckList")
+        || (() => {
+          let el = event.target;
+          while (el && el !== trainTable) {
+            if (isGlobalTrainRow(el)) return el;
+            el = el.parentElement;
+          }
+          return null;
+        })();
       if (!clickedRow || !trainTable.contains(clickedRow)) return;
       const transferInfo = getTransferRouteInfo(clickedRow);
       selectedTrainRow = clickedRow;
+      selectedTrainSegment = getTrainRowSegment(clickedRow);
       selectedTrainRowVersion += 1;
       if (transferInfo.rows.length > 1) {
         selectedTransferRouteKey = transferInfo.key;
@@ -160,6 +218,14 @@ function bindTrainRowClick(dep, arr) {
         selectedTransferRouteGroups.clear();
         console.warn("[Korail] selected direct row:", transferInfo.rows.map((item) => item.segment));
       }
+
+      const clickedRowVersion = selectedTrainRowVersion;
+      clearTimeout(bottomTrainTimeTimer);
+      bottomTrainTimeTimer = setTimeout(() => {
+        if (clickedRowVersion === selectedTrainRowVersion) {
+          fetchBottomBarTrainStations(dep, arr);
+        }
+      }, isGlobalTicketPage() ? 150 : 350);
     });
   }
 
@@ -184,7 +250,7 @@ function bindTrainRowClick(dep, arr) {
     bottomTrainTimeTimer = setTimeout(() => {
       console.warn("[Korail] 하단바 감지 - type:", getBottomBarInfo().type);
       fetchBottomBarTrainStations(dep, arr);
-    }, 300);
+    }, isGlobalTicketPage() ? 80 : 200);
   });
 
   observer.observe(document.body, {
@@ -197,6 +263,8 @@ window.fetchTrainStations = fetchTrainStations;
 // 문장 안에서 역명을 찾아 반환합니다.
 
 function findStationInText(text) {
+  const translated = stationKey(findStationKeyInText(text));
+  if (STATIONS[translated]) return translated;
   const value = text || "";
   return Object.keys(STATIONS)
     .map((name) => {
@@ -343,8 +411,7 @@ async function getTrainTimeButton(row, index = 0) {
   if (!row) return null;
   const timeButtons = [...row.querySelectorAll("a, button")]
     .filter((el) => {
-      const text = (el.textContent || el.getAttribute("aria-label") || "").trim();
-      return text.includes("Time");
+      return isTrainTimeButton(el);
     });
   if (timeButtons[index]) return timeButtons[index];
   if (timeButtons[0]) return timeButtons[0];
@@ -352,7 +419,7 @@ async function getTrainTimeButton(row, index = 0) {
   if (fallbackButtons[index]) return fallbackButtons[index];
   if (fallbackButtons[0]) return fallbackButtons[0];
   // 텍스트 우선 탐색
-  const byText = findButtonByText(row, "열차시각", "시각", "Time");
+  const byText = [...row.querySelectorAll("a, button")].find(isTrainTimeButton);
   if (byText) return byText;
   // fallback: .reserv_center 첫 번째 a
   return null;
@@ -432,6 +499,22 @@ function extractStopStationsFromTimeModal(modal) {
   return stationNames;
 }
 
+function extractSegmentFromTimeModal(modal) {
+  if (!modal) return null;
+  const candidates = [...modal.querySelectorAll(
+    "h1, h2, h3, h4, h5, h6, .title, .tit, .head, [class*='title'], [class*='head'], strong, p, div, span"
+  )]
+    .map((el) => (el.textContent || "").replace(/\s+/g, " ").trim())
+    .filter((text) => text.length <= 120 && (text.match(/→/g) || []).length === 1)
+    .sort((a, b) => a.length - b.length);
+
+  for (const text of candidates) {
+    const segment = parseSegmentFromText(text);
+    if (segment?.dep && segment?.arr) return segment;
+  }
+  return null;
+}
+
 // 열차시각 버튼을 열어 정차역 목록을 읽고 닫습니다.
 
 function waitTrainTimeStations(timeBtn) {
@@ -445,6 +528,7 @@ function waitTrainTimeStations(timeBtn) {
       const stationNames = extractStopStationsFromTimeModal(modal);
       const unique = [];
       stationNames.forEach((name) => { if (unique.at(-1) !== name) unique.push(name); });
+      unique.segment = extractSegmentFromTimeModal(modal);
       return unique.length >= 2
         ? { type: "stations", stationNames: unique }
         : { type: "pending" };
@@ -463,7 +547,7 @@ function waitTrainTimeStations(timeBtn) {
       resolve(result || []);
     };
 
-    const timer = setTimeout(() => finish([]), 10000);
+    const timer = setTimeout(() => finish([]), isGlobalTicketPage() ? 6000 : 10000);
 
     const obs = new MutationObserver(() => {
       if (settled) return;
@@ -555,7 +639,7 @@ function sliceTrainStations(stationNames, dep, arr, side = "auto") {
       backwardDepIndex,
       backwardArrIndex,
     });
-    return stationNames;
+    return getFallbackSegmentStations(dep, arr);
   }
 
   const from = Math.min(depIndex, arrIndex);
@@ -766,7 +850,7 @@ function findBottomTrainTimeButton() {
   return [...document.querySelectorAll("a, button")]
     .filter((el) => {
       const text = (el.textContent || el.getAttribute("aria-label") || "").trim();
-      return (text.includes("열차시각") || /Train\s*Time|Time/i.test(text))
+      return isTrainTimeButton(el)
         && !el.closest(".tckWrap")
         && !el.closest(".ReactModal__Content")
         && isVisibleButton(el);
@@ -783,15 +867,13 @@ function getBottomBarInfo() {
     .find((el) => isVisibleElement(el));
   if (absol) {
     const timeBtns = [...absol.querySelectorAll("a, button")]
-      .filter((el) => (el.textContent || "").trim().includes("열차시각")
-        || /Train\s*Time/i.test(el.textContent || ""))
+      .filter(isTrainTimeButton)
       .filter(isVisibleButton);
     if (timeBtns.length) return { type: "transfer", timeBtns };
   }
   const btn = [...document.querySelectorAll("a, button")]
     .find((el) => {
-      const text = (el.textContent || "").trim();
-      return (text.includes("열차시각") || /Train\s*Time/i.test(text))
+      return isTrainTimeButton(el)
         && !el.closest(".tckWrap")
         && !el.closest(".ReactModal__Content")
         && isVisibleButton(el);
@@ -801,12 +883,22 @@ function getBottomBarInfo() {
 
 // 하단바가 나타날 때까지 기다립니다.
 
-function waitBottomBar(timeout = 3000) {
+function waitBottomBar(timeout = isGlobalTicketPage() ? 1400 : 3000, stableDuration = isGlobalTicketPage() ? 80 : 200) {
   return new Promise((resolve) => {
     const startedAt = Date.now();
+    let lastButtonCount = -1;
+    let stableStartedAt = startedAt;
     const tick = () => {
       const info = getBottomBarInfo();
-      if (info.type !== "none" || Date.now() - startedAt >= timeout) {
+      const now = Date.now();
+      if (info.timeBtns.length !== lastButtonCount) {
+        lastButtonCount = info.timeBtns.length;
+        stableStartedAt = now;
+      }
+      if (
+        (info.timeBtns.length > 0 && now - stableStartedAt >= stableDuration)
+        || now - startedAt >= timeout
+      ) {
         resolve(info);
         return;
       }
@@ -914,47 +1006,64 @@ async function fetchStationsViaBottomBar(row, segmentDep, segmentArr) {
 // 하단 바 열차시각 모달을 열어 정차역을 지도에 반영합니다.
 // 단일/환승 여부를 .absol 존재로 판단하고 각각 처리합니다.
 
-async function fetchBottomBarTrainStations(dep, arr) {
-  if (isFetchingTrainStations) return;
+async function fetchBottomBarTrainStations(dep, arr, requestVersion = selectedTrainRowVersion) {
+  if (isFetchingTrainStations) {
+    if (requestVersion !== activeTrainStationsRequestVersion) {
+      pendingTrainStationsRequest = { dep, arr, requestVersion };
+    }
+    return;
+  }
   isFetchingTrainStations = true;
+  activeTrainStationsRequestVersion = requestVersion;
 
   try {
-    const barInfo = await waitBottomBar(300);
+    const barInfo = await waitBottomBar(isGlobalTicketPage() ? 1400 : 2500);
+    if (requestVersion !== selectedTrainRowVersion) return;
     console.warn("[Korail] barInfo.type:", barInfo.type, "버튼수:", barInfo.timeBtns.length);
     if (barInfo.type === "none") return;
 
-    if (barInfo.type === "single") {
+    if (barInfo.timeBtns.length === 1) {
       // 단일 열차
       const [timeBtn] = barInfo.timeBtns;
-      await waitModalGone(300);
+      await waitModalGone(isGlobalTicketPage() ? 120 : 300);
       const stationNames = await waitTrainTimeStations(timeBtn);
+      if (requestVersion !== selectedTrainRowVersion) return;
       console.warn("[Korail] 단일 stationNames:", stationNames);
       if (stationNames.length < 2) return;
 
-      const segment = getBottomBarSegment() || getSelectedRowSegment() || { dep, arr };
+      const segment = stationNames.segment || getSelectedRowSegment() || getBottomBarSegment() || { dep, arr };
       const segmentDep = segment.dep || dep;
       const segmentArr = segment.arr || arr;
+      const transferStations = getTransferStationNames(
+        (selectedTrainRow ? getConnectedTrainRows(selectedTrainRow) : [])
+          .map((item) => item.segment)
+          .filter(Boolean),
+      );
 
       drawTrainStations(dep, arr, [{
         fullStations: stationNames,
         activeStations: sliceTrainStations(stationNames, segmentDep, segmentArr, "auto"),
+        transferStations,
       }]);
 
     } else {
-      // 환승 열차: .absol 안의 버튼 순서 = 선행/후행
+      // 현재 하단바에 표시된 환승 열차시각 버튼을 모두 다시 조회합니다.
       const fullStationsList = [];
       const activeStationsList = [];
       const parsedSegments = getBottomBarTransferSegments();
       const segments = parsedSegments.length ? parsedSegments : getTransferSegmentsFromSelectedRow();
-      const transferStations = getTransferStationNames(segments);
+      const resolvedSegments = [];
       console.warn("[Korail] 환승 segments:", segments);
 
       for (let i = 0; i < barInfo.timeBtns.length; i++) {
         const timeBtn = barInfo.timeBtns[i];
-        await waitModalGone(300);
+        await waitModalGone(isGlobalTicketPage() ? 120 : 300);
         const stationNames = await waitTrainTimeStations(timeBtn);
-        const segmentDep = segments[i]?.dep || (i === 0 ? dep : segments[i - 1]?.arr || dep);
-        const segmentArr = segments[i]?.arr || (i === barInfo.timeBtns.length - 1 ? arr : dep);
+        if (requestVersion !== selectedTrainRowVersion) return;
+        const modalSegment = stationNames.segment || segments[i];
+        const segmentDep = modalSegment?.dep || (i === 0 ? dep : segments[i - 1]?.arr || dep);
+        const segmentArr = modalSegment?.arr || (i === barInfo.timeBtns.length - 1 ? arr : dep);
+        resolvedSegments.push({ dep: segmentDep, arr: segmentArr });
         const side = i === 0 ? "leading" : i === barInfo.timeBtns.length - 1 ? "trailing" : "auto";
         const fullStations = stationNames.length >= 2
           ? sliceTrainStations(stationNames, segmentDep, segmentArr, side)
@@ -972,8 +1081,15 @@ async function fetchBottomBarTrainStations(dep, arr) {
         activeStationsList.push(activeStations);
       }
 
+      if (resolvedSegments.length === 2 && resolvedSegments[1]?.arr === resolvedSegments[0]?.dep) {
+        resolvedSegments.reverse();
+        fullStationsList.reverse();
+        activeStationsList.reverse();
+      }
+
       const mergedFull = mergeTransferStationLists(fullStationsList);
       const mergedActive = mergeTransferStationLists(activeStationsList);
+      const transferStations = getTransferStationNames(resolvedSegments);
       console.warn("[Korail] 병합된 활성역:", mergedActive);
 
       if (mergedActive.length >= 2) {
@@ -986,6 +1102,16 @@ async function fetchBottomBarTrainStations(dep, arr) {
     }
   } finally {
     isFetchingTrainStations = false;
+    activeTrainStationsRequestVersion = -1;
+    const pendingRequest = pendingTrainStationsRequest;
+    pendingTrainStationsRequest = null;
+    if (pendingRequest && pendingRequest.requestVersion === selectedTrainRowVersion) {
+      fetchBottomBarTrainStations(
+        pendingRequest.dep,
+        pendingRequest.arr,
+        pendingRequest.requestVersion,
+      );
+    }
   }
 }
 
@@ -1011,6 +1137,10 @@ function getBottomBarSegment() {
 }
 
 function getSelectedRowSegment() {
+  if (selectedTrainSegment?.dep && selectedTrainSegment?.arr) {
+    return selectedTrainSegment;
+  }
+
   if (selectedTrainRow?.isConnected) {
     const segment = getTrainRowSegment(selectedTrainRow);
     if (segment?.dep && segment?.arr) return segment;

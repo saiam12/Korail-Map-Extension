@@ -3,18 +3,20 @@
   "name": "Korail 지도 패널",
   "version": "1.0",
   "description": "Korail 열차 검색 결과에 정차역 지도를 표시합니다",
-  "permissions": ["scripting"],
+  "permissions": ["scripting", "geolocation"],
   "background": {
     "service_worker": "background.js"
   },
   "host_permissions": [
     "https://www.korail.com/*",
+    "https://korail.com/*",
+    "https://formspree.io/*",
     "https://maps.apigw.ntruss.com/*",
     "https://nominatim.openstreetmap.org/*"
   ],
   "content_scripts": [
     {
-      "matches": ["https://www.korail.com/*"],
+      "matches": ["https://www.korail.com/*", "https://korail.com/*"],
       "js": ["content.js"],
       "css": ["panel.css", "leaflet.css"],
       "run_at": "document_idle"
@@ -27,15 +29,17 @@
         "leaflet.css",
         "leaflet-images/*.png",
         "station-data.js",
+        "station-translations.js",
         "map-panel.js",
         "api-config.js",
         "injected-core.js",
+        "support-widget.js",
         "home-panel.js",
         "station-popup.js",
         "booking-map.js",
         "injected.js"
       ],
-      "matches": ["https://www.korail.com/*"]
+      "matches": ["https://www.korail.com/*", "https://korail.com/*"]
     }
   ]
 }

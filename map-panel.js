@@ -5,7 +5,15 @@ function korailDisplayStationName(name) {
 }
 
 function korailStationKey(label) {
-  return window.KORAIL_I18N?.stationKey?.(label) || label;
+  const key = window.KORAIL_I18N?.stationKey?.(label) || label;
+  if (STATIONS[key]) return key;
+
+  const shared = window.KORAIL_SHARED;
+  const normalized = shared?.normalizeStationLabel?.(label);
+  if (!normalized) return key;
+  return Object.keys(shared?.STATION_EN || {}).find(
+    (name) => shared.normalizeStationLabel(shared.STATION_EN[name]) === normalized
+  ) || key;
 }
 
 function renderMap(container, dep, arr, stations, fullRoute) {
@@ -98,12 +106,16 @@ function initStationMap(container, popup, currentDep, currentArr) {
     L.latLng(33.5, 125.5),
     L.latLng(38.9, 130.0)
   );
-  const isEnglish = window.KORAIL_I18N?.getLocale?.() === "en";
+  const isGlobalLocale = window.KORAIL_I18N?.getLocale?.() !== "ko";
   const map = L.map(container, {
     maxBounds: koreaBounds,
     maxBoundsViscosity: 1.0,
     minZoom: 5,
   }).setView([36.5, 127.8], 7);
+
+  const hoverPane = map.createPane("korailStationHoverPane");
+  hoverPane.style.zIndex = "700";
+  hoverPane.style.pointerEvents = "none";
 
   L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png", {
     maxZoom: 12,
@@ -118,6 +130,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
     const isMajor = coords.major === true;
     const dotClass = isCurrentDep ? "is-dep" : isCurrentArr ? "is-arr" : "is-gray";
     const majorClass = isMajor ? "is-major" : "";
+    const markerSize = isMajor ? 10 : 7;
 
     const icon = L.divIcon({
       className: "",
@@ -126,14 +139,14 @@ function initStationMap(container, popup, currentDep, currentArr) {
                   ? `<span class="korail-dot-label ${dotClass}">${korailDisplayStationName(name)}</span>`
                  : `<div class="korail-dot ${dotClass} ${majorClass}"></div>`}
               </div>`,
-      iconSize: isCurrentDep || isCurrentArr ? [0, 0] : [8, 8],//12,12
-      iconAnchor: isCurrentDep || isCurrentArr ? [0, 0] : [6, 6],
+      iconSize: isCurrentDep || isCurrentArr ? [0, 0] : [markerSize, markerSize],
+      iconAnchor: isCurrentDep || isCurrentArr ? [0, 0] : [markerSize / 2, markerSize / 2],
     });
-    markers[name] = L.marker([coords.lat, coords.lng], { icon })
+    markers[name] = L.marker([coords.lat, coords.lng], { icon, riseOnHover: true, riseOffset: 1000 })
       .bindTooltip(korailDisplayStationName(name), { permanent: false, direction: "top" })
       .on("click", () => {
         const activeTab = popup.querySelector(".tabPage.active") || popup;
-        activeTab.querySelectorAll("a").forEach((a) => {
+        activeTab.querySelectorAll("a, button").forEach((a) => {
           if (korailStationKey(a.textContent.trim()) === name) a.click();
         });
       });
@@ -143,9 +156,19 @@ function initStationMap(container, popup, currentDep, currentArr) {
     return Object.keys(STATIONS).filter(n => STATIONS[n].major);
   }
 
-  function getVisibleStationNames() {
-    const activeTab = popup.querySelector(".tabPage.active") || popup;
-    return [...new Set([...activeTab.querySelectorAll("a")]
+  function isVisibleElement(el) {
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return rect.width > 0
+      && rect.height > 0
+      && style.display !== "none"
+      && style.visibility !== "hidden";
+  }
+
+  function getVisibleStationNames(scope) {
+    const activeTab = scope || popup.querySelector(".tabPage.active") || popup;
+    return [...new Set([...activeTab.querySelectorAll("a, button")]
+      .filter(isVisibleElement)
       .map((a) => korailStationKey(a.textContent.trim()))
       .filter((name) => STATIONS[name]))];
   }
@@ -164,21 +187,24 @@ function initStationMap(container, popup, currentDep, currentArr) {
   }
 
   function showMajorStations() {
-    const stationNames = isEnglish ? getVisibleStationNames() : getMajorStationNames();
+    const stationNames = isGlobalLocale ? getVisibleStationNames() : getMajorStationNames();
     showOnlyStations(stationNames.length ? stationNames : getMajorStationNames());
     map.flyTo([36.5, 127.8], 7, { duration: 0.5 });
   }
 
   const highlightIcon = (name, on) => {
-    const el = markers[name]?.getElement()?.querySelector(".korail-dot");
+    const marker = markers[name];
+    marker?.setZIndexOffset(on ? 1000 : 0);
+    const el = marker?.getElement()?.querySelector(".korail-dot");
     if (!el) return;
-    el.style.background = on ? "#1A3A6B" : "";
-    el.style.transform = on ? "scale(1.5)" : "scale(1)";
+    const baseSize = STATIONS[name]?.major === true ? 10 : 7;
+    const hoverScale = 12 / baseSize;
+    el.style.background = on ? "#183D78" : "";
+    el.style.transform = on ? `scale(${hoverScale})` : "scale(1)";
     el.classList.toggle("is-gray", !on);
   };
 
   const showHoverMarker = (name, on) => {
-    if (!isEnglish) return;
     if (hoverMarker) {
       map.removeLayer(hoverMarker);
       hoverMarker = null;
@@ -188,17 +214,18 @@ function initStationMap(container, popup, currentDep, currentArr) {
     if (!Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) return;
 
     hoverMarker = L.circleMarker([coords.lat, coords.lng], {
+      pane: "korailStationHoverPane",
       radius: 6,
       color: "#ffffff",
       weight: 3,
-      fillColor: "#1A3A6B",
+      fillColor: "#183D78",
       fillOpacity: 1,
       opacity: 1,
     }).addTo(map);
   };
 
   function attachStationHover(stationList) {
-    stationList.querySelectorAll("a").forEach((a) => {
+    stationList.querySelectorAll("a, button").forEach((a) => {
       const name = korailStationKey(a.textContent.trim());
       if (!STATIONS[name]) return;
       if (a._korailBound) return;
@@ -217,7 +244,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
   }
 
   function attachRegionHover(regionList) {
-    regionList.querySelectorAll("a").forEach((a) => {
+    regionList.querySelectorAll("a, button").forEach((a) => {
       if (a._korailRegionHoverBound) return;
       a._korailRegionHoverBound = true;
       a.addEventListener("mouseenter", () => {
@@ -248,7 +275,9 @@ function initStationMap(container, popup, currentDep, currentArr) {
       // 현재 활성 지역의 역 표시
       const activeRegionBtn = regionList.querySelector(".ch_tag.active a, a.active");
       const activeRegionName = activeRegionBtn?.textContent.trim() || "";
-      const currentStationNames = (REGION_STATIONS[activeRegionName] || []).filter(n => STATIONS[n]);
+      const currentStationNames = isGlobalLocale
+        ? getVisibleStationNames(stationList)
+        : (REGION_STATIONS[activeRegionName] || []).filter(n => STATIONS[n]);
       if (currentStationNames.length > 0 && !map._korailInitialized) {
         map._korailInitialized = true;
         showOnlyStations(currentStationNames);
@@ -256,18 +285,22 @@ function initStationMap(container, popup, currentDep, currentArr) {
         map.flyToBounds(coords, { padding: [30, 30], duration: 0.5 });
       }
 
-      regionList.querySelectorAll("a").forEach((a) => {
+      regionList.querySelectorAll("a, button").forEach((a) => {
         if (a._korailRegionBound) return;
         a._korailRegionBound = true;
         a.addEventListener("click", () => {
-          const regionName = a.textContent.trim();
-          const stationNames = (REGION_STATIONS[regionName] || []).filter(n => STATIONS[n]);
-          showOnlyStations(stationNames);
-          if (stationNames.length > 0) {
-            const coords = stationNames.map(n => [STATIONS[n].lat, STATIONS[n].lng]);
-            map.flyToBounds(coords, { padding: [30, 30], duration: 0.5 });
-          }
-          setTimeout(() => attachStationHover(activeTab), 150);
+          setTimeout(() => {
+            const regionName = a.textContent.trim();
+            const stationNames = isGlobalLocale
+              ? getVisibleStationNames(stationList)
+              : (REGION_STATIONS[regionName] || []).filter(n => STATIONS[n]);
+            showOnlyStations(stationNames);
+            if (stationNames.length > 0) {
+              const coords = stationNames.map(n => [STATIONS[n].lat, STATIONS[n].lng]);
+              map.flyToBounds(coords, { padding: [30, 30], duration: 0.5 });
+            }
+            attachStationHover(activeTab);
+          }, 150);
         });
       });
 
@@ -284,7 +317,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
         }
       });
 
-      activeTab.querySelectorAll("a").forEach((a) => {
+      activeTab.querySelectorAll("a, button").forEach((a) => {
         const name = korailStationKey(a.textContent.trim());
         if (!STATIONS[name]) return;
         if (a._korailBound) return;
@@ -307,10 +340,9 @@ function initStationMap(container, popup, currentDep, currentArr) {
   attachTabEvents();
 
   const tabObserver = new MutationObserver(() => {
-    popup.querySelectorAll("a").forEach(a => { a._korailBound = false; a._korailRegionBound = false; a._korailRegionHoverBound = false; });
     attachTabEvents();
   });
-  tabObserver.observe(popup, { attributes: true, subtree: true, attributeFilter: ["class"] });
+  tabObserver.observe(popup, { attributes: true, childList: true, subtree: true, attributeFilter: ["class"] });
 
   setTimeout(() => map.invalidateSize(), 100);
 }
