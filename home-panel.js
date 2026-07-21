@@ -1036,6 +1036,7 @@ waitForL(() => {
       const address = document.createElement("span");
       address.className = "korail-nearest-history__address";
       address.textContent = entry.address;
+      address.title = entry.address;
 
       const option = document.createElement("span");
       option.className = "korail-nearest-history__option";

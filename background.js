@@ -33,19 +33,19 @@ async function handleSupportSubmit(request, sender) {
   }
 
   const payload = request.payload || {};
+  const formData = new URLSearchParams({
+    category: payload.category || "",
+    message: payload.message || "",
+    contact: payload.contact || "",
+    pageUrl: sender.tab?.url || sender.url || "",
+    locale: typeof payload.locale === "string" ? payload.locale.slice(0, 20) : "unknown",
+  });
   const response = await fetch(endpoint.href, {
     method: "POST",
     headers: {
       "Accept": "application/json",
-      "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      category: payload.category,
-      message: payload.message,
-      contact: payload.contact,
-      pageUrl: sender.tab?.url || sender.url || "",
-      locale: typeof payload.locale === "string" ? payload.locale.slice(0, 20) : "unknown",
-    }),
+    body: formData,
   });
   if (!response.ok) throw new Error(`Feedback submission failed: ${response.status}`);
 }

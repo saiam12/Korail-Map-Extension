@@ -64,7 +64,7 @@
           <p class="korail-support-form__status" aria-live="polite"></p>
         </form>
       </div>
-      <div class="korail-support-choice korail-support-nearest" hidden>
+       <div class="korail-support-choice korail-support-nearest" hidden>
         <button type="button" class="korail-support-back korail-support-nearest__back"></button>
         <form class="korail-nearest-search korail-support-nearest__form">
           <label class="korail-nearest-search__label" for="korail-support-nearest-address" data-nearest-field="address"></label>
@@ -77,9 +77,9 @@
             <button type="button" class="korail-nearest-location-button korail-support-nearest__location" data-nearest-current-location><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg><span data-nearest-location-label></span></button>
           </div>
         </form>
-        <div class="korail-nearest-card__result" data-nearest-result aria-live="polite"></div>
-      </div>
-    </section>`;
+         <div class="korail-nearest-card__result" data-nearest-result aria-live="polite"></div>
+       </div>
+     </section>`;
   document.body.appendChild(modal);
 
   const by = (selector) => modal.querySelector(selector);
@@ -134,7 +134,7 @@
   const showInquiry = () => { choice.hidden = true; inquiry.hidden = false; feedback.hidden = true; nearest.hidden = true; };
   const showNearest = () => { if (!isBookingPage()) return; choice.hidden = true; inquiry.hidden = true; feedback.hidden = true; nearest.hidden = false; };
   const close = () => { modal.hidden = true; showChoices(); };
-  const open = () => { setLabels(); by(".korail-support-form__status").textContent = ""; showChoices(); modal.hidden = false; };
+  const open = () => { setLabels(); by(".korail-support-form__status").textContent = ""; by(".korail-support-form__status").dataset.state = ""; showChoices(); modal.hidden = false; };
   launcher.addEventListener("click", () => {
     if (modal.hidden) open();
     else close();
@@ -193,12 +193,16 @@
   function submitToBackground(payload) {
     const requestId = crypto.randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { window.removeEventListener("message", handler); reject(new Error("timeout")); }, 15000);
-      const handler = (event) => {
-        if (event.source !== window || event.data?.type !== "KORAIL_SUPPORT_RESPONSE" || event.data.requestId !== requestId) return;
+      const finish = (callback) => {
         clearTimeout(timer);
         window.removeEventListener("message", handler);
-        event.data.ok ? resolve() : reject(new Error(event.data.error || "submit failed"));
+        callback();
+      };
+      const timer = setTimeout(() => finish(() => reject(new Error("timeout"))), 15000);
+      const handler = (event) => {
+        if (event.source !== window || event.data?.type !== "KORAIL_SUPPORT_RESPONSE" || event.data.requestId !== requestId) return;
+        if (event.data.ok) finish(resolve);
+        else finish(() => reject(new Error(event.data.error || "Feedback submission failed.")));
       };
       window.addEventListener("message", handler);
       window.postMessage({ type: "KORAIL_SUPPORT_SUBMIT", requestId, payload }, "*");
@@ -211,13 +215,18 @@
     const form = new FormData(event.currentTarget);
     const submit = by(".korail-support-form__submit");
     submit.disabled = true;
+    status.dataset.state = "";
     status.textContent = text("전송 중…", "Sending…");
     try {
       await submitToBackground({ category: form.get("category"), message: form.get("message"), contact: form.get("contact"), pageUrl: location.href, locale: window.KORAIL_SHARED?.getKorailLocale?.() || "unknown" });
       event.currentTarget.reset();
-      status.textContent = text("문의가 전달되었습니다. 감사합니다.", "Your feedback has been sent. Thank you.");
-    } catch {
-      status.textContent = text("전송에 실패했습니다. 잠시 후 다시 시도해주세요.", "Sending failed. Please try again later.");
+      status.dataset.state = "success";
+      status.textContent = text("🎉 문의가 성공적으로 전달되었습니다.", "🎉 Your feedback has been sent successfully.");
+    } catch (error) {
+      status.dataset.state = "";
+      status.textContent = String(error.message || "").includes("429")
+        ? text("요청이 너무 많습니다. 잠시 후 다시 시도해주세요.", "Too many requests. Please try again later.")
+        : text("전송에 실패했습니다. 잠시 후 다시 시도해주세요.", "Sending failed. Please try again later.");
     } finally {
       submit.disabled = false;
     }

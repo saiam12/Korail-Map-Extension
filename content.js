@@ -1,6 +1,8 @@
 // content.js는 페이지 컨텍스트에 나머지 스크립트를 순서대로 주입하는 역할만 합니다.
 
 const FILES = ["leaflet.js", "station-data.js", "station-translations.js", "map-panel.js", "injected-core.js", "support-widget.js", "home-panel.js", "station-popup.js", "booking-map.js"];
+const SUPPORT_FEEDBACK_ENDPOINT = "https://formspree.io/f/mlgqdgbp";
+const INJECTED_RESOURCE_VERSION = "20260721-0850";
 
 window.addEventListener("message", async (event) => {
   if (event.source !== window) return;
@@ -17,14 +19,25 @@ window.addEventListener("message", async (event) => {
     return;
   }
 
-  if (!["KORAIL_MAP_API_REQUEST", "KORAIL_SUPPORT_SUBMIT"].includes(request.type)) return;
+  if (request.type === "KORAIL_SUPPORT_SUBMIT") {
+    if (!isValidPageRequest(request)) return;
+    try {
+      await submitSupportFeedback(request.payload);
+      window.postMessage({ type: "KORAIL_SUPPORT_RESPONSE", requestId: request.requestId, ok: true }, "*");
+    } catch (error) {
+      window.postMessage({ type: "KORAIL_SUPPORT_RESPONSE", requestId: request.requestId, ok: false, error: error.message || "Feedback submission failed." }, "*");
+    }
+    return;
+  }
+
+  if (request.type !== "KORAIL_MAP_API_REQUEST") return;
   if (!isValidPageRequest(request)) return;
 
   try {
     const response = await sendToBackground(request);
 
     window.postMessage({
-      type: request.type === "KORAIL_SUPPORT_SUBMIT" ? "KORAIL_SUPPORT_RESPONSE" : "KORAIL_MAP_API_RESPONSE",
+      type: "KORAIL_MAP_API_RESPONSE",
       requestId: request.requestId,
       ok: response?.ok === true,
       data: response?.data,
@@ -33,13 +46,30 @@ window.addEventListener("message", async (event) => {
     }, "*");
   } catch (error) {
     window.postMessage({
-      type: request.type === "KORAIL_SUPPORT_SUBMIT" ? "KORAIL_SUPPORT_RESPONSE" : "KORAIL_MAP_API_RESPONSE",
+      type: "KORAIL_MAP_API_RESPONSE",
       requestId: request.requestId,
       ok: false,
       error: error.message || "API request failed.",
     }, "*");
   }
 });
+
+async function submitSupportFeedback(payload) {
+  const response = await fetch(SUPPORT_FEEDBACK_ENDPOINT, {
+    method: "POST",
+    headers: { "Accept": "application/json" },
+    body: new URLSearchParams({
+      category: payload.category,
+      message: payload.message,
+      contact: payload.contact,
+      pageUrl: location.href,
+      locale: payload.locale || "unknown",
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Feedback submission failed: ${response.status}`);
+  }
+}
 
 function isValidPageRequest(request) {
   if (request.type === "KORAIL_SUPPORT_SUBMIT") {
@@ -195,7 +225,7 @@ function sendToBackground(request) {
 function injectNext(index) {
   if (index >= FILES.length) return;
   const script = document.createElement("script");
-  script.src = chrome.runtime.getURL(FILES[index]);
+  script.src = `${chrome.runtime.getURL(FILES[index])}?v=${INJECTED_RESOURCE_VERSION}`;
   script.onload = () => injectNext(index + 1);
   document.head.appendChild(script);
 }
