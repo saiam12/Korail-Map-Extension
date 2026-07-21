@@ -8,16 +8,15 @@ Korail 지도 패널(이하 "확장 프로그램")은 Korail 웹사이트에서 
 
 | 정보 | 목적 | 처리 위치 및 보관 |
 | --- | --- | --- |
-| 사용자가 입력한 출발지 주소 | 가까운 역 및 경로 검색 | 지오코딩 요청 시 Cloudflare Worker와 Nominatim에 전송하며, Worker는 같은 검색 결과를 최대 24시간 캐시합니다. 확장 프로그램은 가까운 역 검색 기록을 기기에 최대 7일 보관합니다. |
-| 사용자가 허용한 현재 위치 좌표 | 현재 위치의 주소 확인 및 경로 검색 | 요청할 때만 Cloudflare Worker, Nominatim 및 필요한 경우 Naver Maps API에 전송합니다. 확장 프로그램에는 저장하지 않습니다. |
+| 사용자가 입력한 출발지 주소 또는 장소명 | 가까운 역 및 경로 검색 | 지오코딩 요청 시 Cloudflare Worker와 Naver Maps API에 전송합니다. 주소 검색 결과가 없으면 Naver 지역 검색 API에 장소명을 전송합니다. 확장 프로그램은 가까운 역 검색 기록을 기기에 최대 7일 보관합니다. |
+| 사용자가 허용한 현재 위치 좌표 | 현재 위치의 주소 확인 및 경로 검색 | 요청할 때만 Cloudflare Worker와 Naver Maps API에 전송합니다. 확장 프로그램에는 저장하지 않습니다. |
 | 임의 생성 설치 식별자(UUID) | 지도 API 프록시의 요청 제한 | 확장 프로그램의 로컬 저장소에 보관하고 Cloudflare Worker에 전송합니다. 개인을 식별하거나 광고에 사용하지 않습니다. |
 | 문의 내용, 선택 입력 연락처, 현재 Korail 페이지 URL 및 언어 | 문의 접수 및 회신 | 사용자가 문의 전송을 선택할 때 Formspree에 전송합니다. |
 
 ## 제3자 제공
 
 - Cloudflare Workers: 지도 API 프록시와 요청 제한
-- Naver Cloud Platform Maps: 주소·경로 지도 API
-- OpenStreetMap Foundation Nominatim: 주소와 좌표의 상호 변환
+- Naver Cloud Platform Maps 및 Naver 지역 검색 API: 주소·장소·경로 지도 API
 - Formspree: 사용자가 전송한 확장 프로그램 문의
 
 확장 프로그램은 정보를 판매하거나 광고 프로파일링에 사용하지 않습니다.
@@ -27,5 +26,3 @@ Korail 지도 패널(이하 "확장 프로그램")은 Korail 웹사이트에서 
 위치 권한은 사용자가 현재 위치 기능을 선택한 경우에만 요청합니다. Chrome 확장 프로그램 설정에서 위치 권한을 철회할 수 있으며, 로컬 검색 기록은 확장 프로그램 데이터를 삭제하면 제거됩니다.
 
 개인정보 관련 문의: **tkdldkas@gmail.com**
-
-이 문서를 공개 웹페이지에 게시한 뒤, Chrome Web Store 등록 화면의 개인정보처리방침 URL 필드에 그 주소를 입력해야 합니다.

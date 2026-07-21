@@ -1,23 +1,15 @@
-name = "korail-map-proxy"
+﻿name = "korail-map-proxy"
 main = "src/index.mjs"
 compatibility_date = "2026-07-16"
 
 [vars]
 ALLOWED_EXTENSION_IDS = "REPLACE_WITH_CHROME_EXTENSION_ID"
-PRIVACY_POLICY_URL = "https://REPLACE_WITH_YOUR_PUBLIC_PRIVACY_POLICY_URL"
 
 [[ratelimits]]
 name = "MAPS_RATE_LIMITER"
 namespace_id = "1001"
 
   [ratelimits.simple]
-  limit = 40
+  limit = 300
   period = 60
 
-[[ratelimits]]
-name = "GEOCODE_RATE_LIMITER"
-namespace_id = "1002"
-
-  [ratelimits.simple]
-  limit = 1
-  period = 1

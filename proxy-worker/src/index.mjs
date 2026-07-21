@@ -1,5 +1,4 @@
 const NAVER_MAPS_BASE_URL = "https://maps.apigw.ntruss.com";
-const NOMINATIM_BASE_URL = "https://nominatim.openstreetmap.org";
 
 function json(data, status = 200, origin = "", extraHeaders = {}) {
   const headers = {
@@ -56,24 +55,36 @@ async function requestNaver(url, env) {
   return { ok: true, status: response.status, data };
 }
 
-async function requestNominatim(url, privacyPolicyUrl) {
-  const cache = caches.default;
-  const cached = await cache.match(url);
-  if (cached) return { ok: true, status: 200, data: await cached.json() };
+async function requestNaverLocalSearch(query, env) {
+  if (!env.NAVER_LOCAL_SEARCH_CLIENT_ID || !env.NAVER_LOCAL_SEARCH_CLIENT_SECRET) return [];
+  const url = `https://openapi.naver.com/v1/search/local.json?${new URLSearchParams({ query, display: "1" })}`;
   const response = await fetch(url, {
     headers: {
-      "Accept": "application/json",
-      "User-Agent": `KorailMapExtension/1.0 (${privacyPolicyUrl})`,
+      "X-Naver-Client-Id": env.NAVER_LOCAL_SEARCH_CLIENT_ID,
+      "X-Naver-Client-Secret": env.NAVER_LOCAL_SEARCH_CLIENT_SECRET,
     },
   });
   const data = await response.json().catch(() => null);
-  if (!response.ok || !data) {
-    return { ok: false, status: response.status, data: data || { error: "Invalid geocoding response." } };
-  }
-  await cache.put(url, new Response(JSON.stringify(data), {
-    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=86400" },
-  }));
-  return { ok: true, status: response.status, data };
+  return response.ok && Array.isArray(data?.items) ? data.items : [];
+}
+
+function localSearchCoordinates(items) {
+  return items
+    .map((item) => ({ lat: Number(item.mapy) / 10_000_000, lon: Number(item.mapx) / 10_000_000 }))
+    .filter(({ lat, lon }) => isCoordinate(lat, 32, 39) && isCoordinate(lon, 124, 132));
+}
+
+function naverReverseAddress(data) {
+  const result = data.results?.find((item) => item.name === "roadaddr") || data.results?.[0];
+  if (!result) return "";
+  const region = ["area1", "area2", "area3", "area4"]
+    .map((area) => result.region?.[area]?.name || "")
+    .filter(Boolean);
+  const land = [result.land?.name, result.land?.number1, result.land?.number2 && `-${result.land.number2}`]
+    .filter(Boolean)
+    .join(" ")
+    .replace(" -", "-");
+  return [...region, land].filter(Boolean).join(" ");
 }
 
 export default {
@@ -119,33 +130,6 @@ export default {
     if (pathname === "/v1/reverse-geocode" && body.kind !== "locationReverse") return json({ error: "Invalid request." }, 400, origin);
     if (pathname === "/v1/maps" && !["geocode", "driving"].includes(body.kind)) return json({ error: "Invalid request." }, 400, origin);
 
-    if (pathname !== "/v1/maps") {
-      const privacyPolicyUrl = String(env.PRIVACY_POLICY_URL || "");
-      if (!privacyPolicyUrl.startsWith("https://")) return json({ error: "Privacy policy URL is not configured." }, 503, origin);
-      if (!env.GEOCODE_RATE_LIMITER) return json({ error: "Geocoding rate limiter is not configured." }, 503, origin);
-
-      if (pathname === "/v1/geocode") {
-        const address = String(body.address || "").trim();
-        if (!address || address.length > 200) return json({ error: "Invalid address." }, 400, origin);
-        const url = `${NOMINATIM_BASE_URL}/search?${new URLSearchParams({ q: address, format: "json", limit: "1", countrycodes: "kr" })}`;
-        const cached = await caches.default.match(url);
-        if (cached) return json(await cached.json(), 200, origin);
-        const { success } = await env.GEOCODE_RATE_LIMITER.limit({ key: "nominatim-global" });
-        if (!success) return json({ error: "Geocoding is busy. Please try again shortly." }, 429, origin, { "Retry-After": "1" });
-        const result = await requestNominatim(url, privacyPolicyUrl);
-        return json(result.data, result.ok ? 200 : result.status, origin);
-      }
-
-      if (!isCoordinate(body.lat, 32, 39) || !isCoordinate(body.lng, 124, 132)) return json({ error: "Invalid coordinates." }, 400, origin);
-      const url = `${NOMINATIM_BASE_URL}/reverse?${new URLSearchParams({ lat: String(body.lat), lon: String(body.lng), format: "json", zoom: "18" })}`;
-      const cached = await caches.default.match(url);
-      if (cached) return json(await cached.json(), 200, origin);
-      const { success } = await env.GEOCODE_RATE_LIMITER.limit({ key: "nominatim-global" });
-      if (!success) return json({ error: "Geocoding is busy. Please try again shortly." }, 429, origin, { "Retry-After": "1" });
-      const result = await requestNominatim(url, privacyPolicyUrl);
-      return json(result.data, result.ok ? 200 : result.status, origin);
-    }
-
     if (!env.NAVER_CLIENT_ID || !env.NAVER_CLIENT_SECRET) {
       return json({ error: "Proxy is not configured." }, 503, origin);
     }
@@ -167,10 +151,18 @@ export default {
     }
 
     let naverUrl;
-    if (body.kind === "geocode") {
+    if (pathname === "/v1/geocode" || body.kind === "geocode") {
       const address = String(body.address || "").trim();
       if (!address || address.length > 200) return json({ error: "Invalid address." }, 400, origin);
       naverUrl = `${NAVER_MAPS_BASE_URL}/map-geocode/v2/geocode?query=${encodeURIComponent(address)}`;
+    } else if (pathname === "/v1/reverse-geocode") {
+      if (!isCoordinate(body.lat, 32, 39) || !isCoordinate(body.lng, 124, 132)) return json({ error: "Invalid coordinates." }, 400, origin);
+      const query = new URLSearchParams({
+        coords: `${Number(body.lng)},${Number(body.lat)}`,
+        output: "json",
+        orders: "roadaddr,addr",
+      });
+      naverUrl = `${NAVER_MAPS_BASE_URL}/map-reversegeocode/v2/gc?${query}`;
     } else {
       if (!validateDrivingPayload(body)) return json({ error: "Invalid coordinates." }, 400, origin);
       const query = new URLSearchParams({
@@ -182,6 +174,17 @@ export default {
     }
 
     const result = await requestNaver(naverUrl, env);
+    if (pathname === "/v1/geocode" && result.ok) {
+      const addresses = Array.isArray(result.data.addresses) ? result.data.addresses : [];
+      if (addresses.length) return json(addresses.map((address) => ({ lat: address.y, lon: address.x })), 200, origin);
+      return json(localSearchCoordinates(await requestNaverLocalSearch(String(body.address).trim(), env)), 200, origin);
+    }
+    if (pathname === "/v1/reverse-geocode" && result.ok) {
+      const displayName = naverReverseAddress(result.data);
+      return displayName
+        ? json({ display_name: displayName }, 200, origin)
+        : json({ error: "Reverse geocoding failed." }, 502, origin);
+    }
     if (result.ok && body.kind === "geocode" && result.data.status !== "OK") {
       return json({ error: result.data.errorMessage || "Geocoding failed." }, 502, origin);
     }
