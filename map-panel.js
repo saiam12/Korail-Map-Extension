@@ -16,6 +16,41 @@ function korailStationKey(label) {
   ) || key;
 }
 
+function addKorailMapLabelToggle(map, maxZoom) {
+  if (window.KORAIL_I18N?.getLocale?.() === "ko") return;
+
+  const labelPane = map.createPane("korailLabelPane");
+  labelPane.style.zIndex = "350";
+  labelPane.style.pointerEvents = "none";
+
+  const labelLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}.png", {
+    minZoom: 8,
+    maxZoom,
+    pane: "korailLabelPane",
+  });
+
+  const LabelToggleControl = L.Control.extend({
+    options: { position: "topright" },
+    onAdd() {
+      const control = L.DomUtil.create("div", "korail-map-label-control leaflet-control");
+      const labelText = "Labels";
+      control.innerHTML = `<label><span>${labelText}</span><input type="checkbox" aria-label="${labelText}"><span class="korail-map-label-control__switch" aria-hidden="true"></span></label>`;
+      L.DomEvent.disableClickPropagation(control);
+      L.DomEvent.disableScrollPropagation(control);
+      control.querySelector("input").addEventListener("change", (event) => {
+        if (event.target.checked) {
+          if (!map.hasLayer(labelLayer)) labelLayer.addTo(map);
+        } else if (map.hasLayer(labelLayer)) {
+          map.removeLayer(labelLayer);
+        }
+      });
+      return control;
+    },
+  });
+
+  new LabelToggleControl().addTo(map);
+}
+
 function renderMap(container, dep, arr, stations, fullRoute) {
   try {
     window._korailMapInstance = initMap(container, dep, arr, stations, fullRoute);
@@ -39,12 +74,15 @@ function initMap(container, dep, arr, stations, fullRoute) {
     maxBounds: koreaBounds,
     maxBoundsViscosity: 1.0,
     minZoom: 7,
+    zoomSnap: 0.5,
+    zoomDelta: 0.5,
   }).setView([mid.lat, mid.lng], 7);
 
   L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png", {
     attribution: "© OpenStreetMap © CARTO",
     maxZoom: 16,
   }).addTo(map);
+  addKorailMapLabelToggle(map, 16);
 
   const selectedNames = new Set(stations.map((s) => s.name));
 
@@ -75,11 +113,12 @@ function initMap(container, dep, arr, stations, fullRoute) {
     const labelClass = isDep ? "is-dep" : isArr ? "is-arr" : "";
 
     const icon = L.divIcon({
-      className: "",
+      className: "korail-station-marker",
       html: `<div class="korail-dot-wrap ${isDep || isArr ? "is-label" : ""}">
                ${isDep || isArr
                   ? `<span class="korail-dot-label ${dotClass}">${korailDisplayStationName(name)}</span>`
                  : `<div class="korail-dot> ${dotClass}"></div>`}
+               <span class="korail-marker-hitarea" style="--korail-hit-size: 11px" aria-hidden="true"></span>
               </div>`,
       iconSize: isDep || isArr ? [0, 0] : [11, 11],
       iconAnchor: isDep || isArr ? [0, 0] : [5.5, 5.5],
@@ -111,6 +150,8 @@ function initStationMap(container, popup, currentDep, currentArr) {
     maxBounds: koreaBounds,
     maxBoundsViscosity: 1.0,
     minZoom: 5,
+    zoomSnap: 0.5,
+    zoomDelta: 0.5,
   }).setView([36.5, 127.8], 7);
 
   const hoverPane = map.createPane("korailStationHoverPane");
@@ -120,10 +161,12 @@ function initStationMap(container, popup, currentDep, currentArr) {
   L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png", {
     maxZoom: 12,
   }).addTo(map);
+  addKorailMapLabelToggle(map, 12);
 
   // 모든 역 마커 생성 (초기엔 지도에 추가 안 함)
   const markers = {};
   let hoverMarker = null;
+  let hoverTrackingEnabled = true;
   Object.entries(STATIONS).forEach(([name, coords]) => {
     const isCurrentDep = name === currentDep;
     const isCurrentArr = name === currentArr;
@@ -133,11 +176,12 @@ function initStationMap(container, popup, currentDep, currentArr) {
     const markerSize = isMajor ? 10 : 7;
 
     const icon = L.divIcon({
-      className: "",
+      className: "korail-station-marker",
       html: `<div class="korail-dot-wrap ${isCurrentDep || isCurrentArr ? "is-label" : ""}">
                ${isCurrentDep || isCurrentArr
                   ? `<span class="korail-dot-label ${dotClass}">${korailDisplayStationName(name)}</span>`
                  : `<div class="korail-dot ${dotClass} ${majorClass}"></div>`}
+               <span class="korail-marker-hitarea" style="--korail-hit-size: ${isCurrentDep || isCurrentArr ? 11 : markerSize}px" aria-hidden="true"></span>
               </div>`,
       iconSize: isCurrentDep || isCurrentArr ? [0, 0] : [markerSize, markerSize],
       iconAnchor: isCurrentDep || isCurrentArr ? [0, 0] : [markerSize / 2, markerSize / 2],
@@ -195,7 +239,13 @@ function initStationMap(container, popup, currentDep, currentArr) {
   const highlightIcon = (name, on) => {
     const marker = markers[name];
     marker?.setZIndexOffset(on ? 1000 : 0);
-    const el = marker?.getElement()?.querySelector(".korail-dot");
+    const markerElement = marker?.getElement();
+    const label = markerElement?.querySelector(".korail-dot-label");
+    if (label) {
+      label.classList.toggle("is-hovered", on);
+      return;
+    }
+    const el = markerElement?.querySelector(".korail-dot");
     if (!el) return;
     const baseSize = STATIONS[name]?.major === true ? 10 : 7;
     const hoverScale = 12 / baseSize;
@@ -209,7 +259,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
       map.removeLayer(hoverMarker);
       hoverMarker = null;
     }
-    if (!on || !STATIONS[name]) return;
+    if (!on || !STATIONS[name] || name === currentDep || name === currentArr) return;
     const coords = STATIONS[name];
     if (!Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) return;
 
@@ -234,7 +284,9 @@ function initStationMap(container, popup, currentDep, currentArr) {
         highlightIcon(name, true);
         showHoverMarker(name, true);
         // 현재 줌 그대로 유지하며 위치만 이동
-        map.panTo([STATIONS[name].lat, STATIONS[name].lng], { animate: true, duration: 0.4 });
+        if (hoverTrackingEnabled) {
+          map.panTo([STATIONS[name].lat, STATIONS[name].lng], { animate: true, duration: 0.4 });
+        }
       });
       a.addEventListener("mouseleave", () => {
         highlightIcon(name, false);
@@ -266,6 +318,19 @@ function initStationMap(container, popup, currentDep, currentArr) {
   function attachTabEvents() {
     const activeTab = popup.querySelector(".tabPage.active") || popup;
     const items = activeTab.querySelectorAll(".travel-ch_list li");
+    if (!isGlobalLocale) {
+      const tabLabels = [...popup.querySelectorAll("*")]
+        .filter((element) => element.children.length === 0 && isVisibleElement(element));
+      const majorTab = tabLabels.find((element) => element.textContent.trim() === "주요역");
+      const regionTab = tabLabels.find((element) => element.textContent.trim() === "지역별");
+      let tabRow = majorTab?.parentElement;
+      while (tabRow && regionTab && !tabRow.contains(regionTab)) tabRow = tabRow.parentElement;
+      if (tabRow && regionTab && tabRow !== popup) {
+        tabRow.classList.add("korail-station-tab-row");
+        trackingToggle.classList.add("is-tab-row");
+        if (trackingToggle.parentElement !== tabRow) tabRow.appendChild(trackingToggle);
+      }
+    }
 
     if (items.length >= 2) {
       // 지역별 탭
@@ -325,7 +390,9 @@ function initStationMap(container, popup, currentDep, currentArr) {
         a.addEventListener("mouseenter", () => {
           highlightIcon(name, true);
           showHoverMarker(name, true);
-          map.panTo([STATIONS[name].lat, STATIONS[name].lng], { animate: true, duration: 0.4 });
+          if (hoverTrackingEnabled) {
+            map.panTo([STATIONS[name].lat, STATIONS[name].lng], { animate: true, duration: 0.4 });
+          }
         });
         a.addEventListener("mouseleave", () => {
           highlightIcon(name, false);
@@ -336,6 +403,18 @@ function initStationMap(container, popup, currentDep, currentArr) {
   }
 
   // 초기 주요역 표시
+  popup.querySelector(".korail-station-tracking-toggle")?.remove();
+  const trackingText = isGlobalLocale ? "Map tracking" : "지도 트래킹";
+  const trackingToggle = document.createElement("div");
+  trackingToggle.className = "korail-station-tracking-toggle";
+  trackingToggle.classList.toggle("is-korean", !isGlobalLocale);
+  trackingToggle.innerHTML = `<label><input type="checkbox" checked aria-label="${trackingText}"><span class="korail-station-tracking-toggle__switch" aria-hidden="true"></span><span>${trackingText}</span></label>`;
+  popup.appendChild(trackingToggle);
+  trackingToggle.querySelector("input").addEventListener("change", (event) => {
+    hoverTrackingEnabled = event.target.checked;
+    if (!hoverTrackingEnabled) map.stop();
+  });
+
   showMajorStations();
   attachTabEvents();
 

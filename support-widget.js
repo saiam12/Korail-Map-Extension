@@ -4,7 +4,11 @@
 
   const isKorean = () => window.KORAIL_SHARED?.getKorailLocale?.() === "ko";
   const text = (ko, en) => isKorean() ? ko : en;
-  const endpoint = () => window.KORAIL_MAP_CONFIG?.supportFeedbackEndpoint?.trim() || "";
+  const trainTimeAutomationStorageKey = "korail-map-train-time-automation";
+  const isStoredToggleEnabled = (key) => {
+    try { return localStorage.getItem(key) !== "false"; }
+    catch { return true; }
+  };
   const officialCenterUrl = "https://info.korail.com/mbs/www/jsp/voc/explorer";
   const restaurantGuideUrls = {
     ko: "https://korean.visitkorea.or.kr/main/area_chart.do",
@@ -34,6 +38,12 @@
       </header>
       <div class="korail-support-choice">
         <p class="korail-support-choice__notice"></p>
+        <label class="korail-support-debug-toggle">
+          <span class="korail-support-debug-toggle__copy"><strong data-train-time-automation-label></strong><small data-train-time-automation-description></small></span>
+          <input type="checkbox" data-train-time-automation>
+          <span class="korail-support-debug-toggle__switch" aria-hidden="true"></span>
+        </label>
+        <button type="button" class="korail-support-choice__item" data-support-choice="nearest"><strong></strong><span></span></button>
         <button type="button" class="korail-support-choice__item" data-support-choice="inquiry"><strong></strong><span></span></button>
         <button type="button" class="korail-support-choice__item" data-support-choice="restaurant"><strong></strong><span></span></button>
       </div>
@@ -46,13 +56,28 @@
         <button type="button" class="korail-support-back korail-support-feedback__back"></button>
         <form class="korail-support-form">
           <p class="korail-support-form__notice"></p>
-          <label><span data-support-field="category"></span><select name="category"><option value="bug"></option><option value="suggestion"></option><option value="usage"></option><option value="other"></option></select></label>
+          <label><span data-support-field="category"></span><select name="category"><option value="bug"></option><option value="suggestion"></option><option value="other"></option></select></label>
           <label><span data-support-field="message"></span><textarea name="message" required maxlength="4000"></textarea></label>
           <label><span data-support-field="contact"></span><input name="contact" type="text" maxlength="200"></label>
           <p class="korail-support-form__privacy"></p>
           <div class="korail-support-form__actions"><button type="button" class="korail-support-modal__cancel"></button><button type="submit" class="korail-support-form__submit"></button></div>
           <p class="korail-support-form__status" aria-live="polite"></p>
         </form>
+      </div>
+      <div class="korail-support-choice korail-support-nearest" hidden>
+        <button type="button" class="korail-support-back korail-support-nearest__back"></button>
+        <form class="korail-nearest-search korail-support-nearest__form">
+          <label class="korail-nearest-search__label" for="korail-support-nearest-address" data-nearest-field="address"></label>
+          <div class="korail-nearest-search__row">
+            <input id="korail-support-nearest-address" data-nearest-address name="address" type="text" required autocomplete="street-address">
+            <button type="submit" class="korail-nearest-card__button" data-nearest-submit></button>
+          </div>
+          <div class="korail-nearest-search__options">
+            <label class="korail-nearest-search__toggle"><input data-nearest-include-all name="includeAll" type="checkbox"><span class="korail-nearest-search__switch" aria-hidden="true"></span><span data-nearest-field="includeAll"></span></label>
+            <button type="button" class="korail-nearest-location-button korail-support-nearest__location" data-nearest-current-location><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg><span data-nearest-location-label></span></button>
+          </div>
+        </form>
+        <div class="korail-nearest-card__result" data-nearest-result aria-live="polite"></div>
       </div>
     </section>`;
   document.body.appendChild(modal);
@@ -61,9 +86,21 @@
   const choice = by(".korail-support-choice");
   const inquiry = by(".korail-support-inquiry");
   const feedback = by(".korail-support-feedback");
+  const trainTimeAutomationToggle = by("[data-train-time-automation]");
+  const nearest = by(".korail-support-nearest");
+  const nearestChoice = by("[data-support-choice='nearest']");
+  const isBookingPage = () => /\/ticket\/search\//.test(location.pathname) || !!document.querySelector(".tckWrap");
   const setLabels = () => {
     by("#korail-support-title").textContent = text("서비스 안내", "Support");
-    by(".korail-support-choice__notice").textContent = text("에러코드가 표시되면 페이지가 자동으로 새로고침됩니다.", "The page refreshes automatically\nwhen an error code appears.");
+    by(".korail-support-choice__notice").textContent = text("에러코드가 표시되면 페이지가 자동으로 새로고침됩니다.", "The page refreshes automatically when an error code appears.");
+    by("[data-train-time-automation-label]").textContent = text("지도 중간역 표시", "Show intermediate stations on the map");
+    by("[data-train-time-automation-description]").textContent = text("조회를 위한 깜빡임이 있을 수 있습니다.\n운임요금 버튼 이용 시 해제 후 사용하세요.", "The screen may briefly flicker while loading. Turn this off before using the Fare button.");
+    trainTimeAutomationToggle.checked = isStoredToggleEnabled(trainTimeAutomationStorageKey);
+    by("[data-support-choice='nearest'] strong").textContent = text("가까운 주요역 찾기", "Find nearby major stations");
+    by("[data-support-choice='nearest'] span").textContent = text("주소를 기준으로 가까운 주요역을 찾습니다.", "Find nearby major stations by address.");
+    // 서비스 안내의 가까운 주요역 찾기는 임시 비활성화합니다.
+    // nearestChoice.hidden = !isBookingPage();
+    nearestChoice.hidden = true;
     by("[data-support-choice='inquiry'] strong").textContent = text("문의", "Contact");
     by("[data-support-choice='inquiry'] span").textContent = text("확장 프로그램과 코레일 관련 문의", "Extension and KORAIL inquiries");
     by("[data-support-choice='extension'] strong").textContent = text("확장 프로그램 문의", "Extension feedback");
@@ -74,11 +111,18 @@
     by("[data-support-choice='restaurant'] span").textContent = text("지역별 맛집과 여행 정보", "Regional restaurants and travel information");
     by(".korail-support-inquiry__back").textContent = text("← 처음으로", "← Back");
     by(".korail-support-feedback__back").textContent = text("← 문의 유형 선택", "← Choose support type");
+    by(".korail-support-nearest__back").textContent = text("← 처음으로", "← Back");
+    by("[data-nearest-field='address']").textContent = text("출발 위치", "Starting location");
+    by("[data-nearest-field='includeAll']").textContent = text("일반역 포함", "Include all stations");
+    by(".korail-support-nearest__form input[name='address']").placeholder = text("예: 서울시청, 대구 수성구", "e.g. Seoul City Hall");
+    by("[data-nearest-location-label]").textContent = text("내 위치", "My location");
+    by("[data-nearest-submit]").textContent = text("검색", "Search");
+    window.KORAIL_HOME?.renderNearestResults?.(nearest, "idle", text("주소를 입력한 후 검색하세요.", "Enter an address and search."));
     by("[data-support-field='category']").textContent = text("문의 유형", "Category");
     by("[data-support-field='message']").textContent = text("문의 내용 *", "Message *");
     by("[data-support-field='contact']").textContent = text("회신 연락처 (선택)", "Reply contact (optional)");
     const options = by("select[name='category']").options;
-    [text("오류 신고", "Bug report"), text("기능 제안", "Feature request"), text("사용 방법", "How to use"), text("기타", "Other")].forEach((label, index) => { options[index].text = label; });
+    [text("오류 신고", "Bug report"), text("기능 제안", "Feature request"), text("기타", "Other")].forEach((label, index) => { options[index].text = label; });
     by("textarea").placeholder = text("문제 상황이나 제안 내용을 자세히 적어주세요.", "Describe the problem or suggestion in detail.");
     by("input[name='contact']").placeholder = text("이메일, 카카오톡 ID 등", "Email or another contact method");
     by(".korail-support-form__privacy").textContent = text("확장 프로그램에 관한 내용만 남겨주세요.", "Please send questions about this extension only.");
@@ -86,8 +130,9 @@
     by(".korail-support-form__submit").textContent = text("문의 제출", "Send feedback");
   };
 
-  const showChoices = () => { choice.hidden = false; inquiry.hidden = true; feedback.hidden = true; };
-  const showInquiry = () => { choice.hidden = true; inquiry.hidden = false; feedback.hidden = true; };
+  const showChoices = () => { choice.hidden = false; inquiry.hidden = true; feedback.hidden = true; nearest.hidden = true; };
+  const showInquiry = () => { choice.hidden = true; inquiry.hidden = false; feedback.hidden = true; nearest.hidden = true; };
+  const showNearest = () => { if (!isBookingPage()) return; choice.hidden = true; inquiry.hidden = true; feedback.hidden = true; nearest.hidden = false; };
   const close = () => { modal.hidden = true; showChoices(); };
   const open = () => { setLabels(); by(".korail-support-form__status").textContent = ""; showChoices(); modal.hidden = false; };
   launcher.addEventListener("click", () => {
@@ -98,11 +143,51 @@
   by(".korail-support-modal__cancel").addEventListener("click", close);
   by(".korail-support-modal__backdrop").addEventListener("click", close);
   by(".korail-support-feedback__back").addEventListener("click", showInquiry);
+  by(".korail-support-nearest__back").addEventListener("click", showChoices);
   by(".korail-support-inquiry__back").addEventListener("click", showChoices);
   by("[data-support-choice='inquiry']").addEventListener("click", showInquiry);
+  by("[data-support-choice='nearest']").addEventListener("click", showNearest);
   by("[data-support-choice='extension']").addEventListener("click", () => { inquiry.hidden = true; feedback.hidden = false; by("textarea").focus(); });
   by("[data-support-choice='korail']").addEventListener("click", () => window.open(officialCenterUrl, "_blank", "noopener"));
   by("[data-support-choice='restaurant']").addEventListener("click", () => window.open(restaurantGuideUrl(), "_blank", "noopener"));
+  trainTimeAutomationToggle.addEventListener("change", () => {
+    try { localStorage.setItem(trainTimeAutomationStorageKey, String(trainTimeAutomationToggle.checked)); }
+    catch { /* 저장할 수 없는 환경에서는 기본값을 사용합니다. */ }
+  });
+  by("[data-nearest-current-location]").addEventListener("click", async () => {
+    const button = by("[data-nearest-current-location]");
+    const input = by(".korail-support-nearest__form input[name='address']");
+    const label = by("[data-nearest-location-label]");
+    button.disabled = true;
+    label.textContent = text("위치 확인 중…", "Locating…");
+    try {
+      const address = await window.KORAIL_HOME?.getCurrentLocationAddress?.();
+      if (!address) throw new Error("location service unavailable");
+      input.value = address;
+      input.focus();
+    } catch {
+      window.KORAIL_HOME?.renderNearestResults?.(nearest, "error", text("현재 위치를 가져올 수 없습니다. 위치 권한을 확인해주세요.", "Unable to get your current location. Check location permission."));
+    } finally {
+      button.disabled = false;
+      label.textContent = text("내 위치", "My location");
+    }
+  });
+  by(".korail-support-nearest__form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submit = by("[data-nearest-submit]");
+    window.KORAIL_HOME?.renderNearestResults?.(nearest, "loading", text("계산 중입니다.", "Calculating."));
+    submit.disabled = true;
+    try {
+      const stations = await window.KORAIL_HOME?.findNearestStationResults?.(form.elements.address.value, form.elements.includeAll.checked);
+      if (!stations) throw new Error(text("서비스를 준비하는 중입니다. 잠시 후 다시 시도해주세요.", "The service is still loading. Please try again shortly."));
+      window.KORAIL_HOME.renderNearestResults(nearest, "done", text("가까운 주요역", "Nearby major stations"), stations);
+    } catch (error) {
+      window.KORAIL_HOME?.renderNearestResults?.(nearest, "error", error.message || text("조회 중 오류가 발생했습니다.", "An error occurred while searching."));
+    } finally {
+      submit.disabled = false;
+    }
+  });
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !modal.hidden) close(); });
 
   function submitToBackground(payload) {
@@ -116,17 +201,13 @@
         event.data.ok ? resolve() : reject(new Error(event.data.error || "submit failed"));
       };
       window.addEventListener("message", handler);
-      window.postMessage({ type: "KORAIL_SUPPORT_SUBMIT", requestId, endpoint: endpoint(), payload }, "*");
+      window.postMessage({ type: "KORAIL_SUPPORT_SUBMIT", requestId, payload }, "*");
     });
   }
 
   by(".korail-support-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const status = by(".korail-support-form__status");
-    if (!endpoint()) {
-      status.textContent = text("문의 수신 주소가 아직 연결되지 않았습니다.", "The feedback endpoint has not been configured yet.");
-      return;
-    }
     const form = new FormData(event.currentTarget);
     const submit = by(".korail-support-form__submit");
     submit.disabled = true;
@@ -152,8 +233,8 @@
     if (!hasErrorCode) return;
 
     errorReloadScheduled = true;
-    const randomNumber = Math.floor(Math.random() * 101) + 100;
-    setTimeout(() => location.reload(), Math.random(randomNumber));//100-200ms 지연 후 새로고침
+    const randomNumber = Math.floor(Math.random() * 51) + 50;
+    setTimeout(() => location.reload(), randomNumber);//100-200ms 지연 후 새로고침
   };
 
   let errorDialogScanFrame = null;

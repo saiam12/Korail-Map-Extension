@@ -1,8 +1,31 @@
 // 홈 화면 가까운 주요역 패널 기능입니다.
 
 waitForL(() => {
-  const { HOME_PANEL_ID, QUICK_MENU_TEXTS, t, stationName, getKorailLocale } = window.KORAIL_SHARED;
+  const {
+    HOME_PANEL_ID,
+    QUICK_MENU_TEXTS,
+    t,
+    stationName,
+    getKorailLocale,
+    isVisibleFullMenuOpen,
+  } = window.KORAIL_SHARED;
   const nearestSearchCache = new Map();
+  const pendingNearestSearches = new Map();
+  const nearestSearchTimestamps = [];
+  const nearestCacheTtlMs = 7 * 24 * 60 * 60 * 1000;
+  const nearestSearchWindowMs = 60 * 1000;
+  const nearestSearchLimit = 5;
+  let mainToggleWatchRaf = 0;
+  let mainToggleContainer = null;
+
+  function resetMainToggleContainer() {
+    if (mainToggleContainer?.dataset.korailMainTogglePositioned === "true") {
+      mainToggleContainer.style.position = mainToggleContainer.dataset.korailMainToggleOriginalPosition || "";
+      delete mainToggleContainer.dataset.korailMainTogglePositioned;
+      delete mainToggleContainer.dataset.korailMainToggleOriginalPosition;
+    }
+    mainToggleContainer = null;
+  }
 
   // 예매 결과 지도 래퍼와 패널을 원래 DOM 상태로 정리합니다.
 
@@ -22,6 +45,9 @@ waitForL(() => {
   // 홈 화면 가까운 역 패널과 버튼을 제거합니다.
 
   function cleanupHomeNearestPanel() {
+    window.cancelAnimationFrame(mainToggleWatchRaf);
+    mainToggleWatchRaf = 0;
+    resetMainToggleContainer();
     const panel = document.getElementById(HOME_PANEL_ID);
     if (panel) panel.remove();
     document.getElementById("korail-nearest-mini-btn")?.remove();
@@ -95,8 +121,41 @@ waitForL(() => {
     return hasDismissControl || hasAdButtons;
   }
 
+  function isVisibleKorailModalOpen() {
+    const selector = [
+      ".ReactModal__Content",
+      ".layerPopup",
+      ".layerWrap",
+      ".layer_wrap",
+      "[role='dialog']",
+      "[aria-modal='true']",
+    ].join(", ");
+    return [...document.querySelectorAll(selector)].some((el) => {
+      if (el.matches(".event-pop") || el.closest(".event-pop")) return false;
+      if (el.closest(`#${HOME_PANEL_ID}, #korail-support-modal, #korail-station-map-popup`)) return false;
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      const isSemanticDialog = el.matches("[role='dialog'], [aria-modal='true']");
+      const isPositionedOverlay = style.position === "fixed" || style.position === "absolute";
+      return rect.width > 0
+        && rect.height > 0
+        && rect.right > 0
+        && rect.bottom > 0
+        && rect.left < window.innerWidth
+        && rect.top < window.innerHeight
+        && style.display !== "none"
+        && style.visibility !== "hidden"
+        && Number.parseFloat(style.opacity || "1") > 0
+        && (isSemanticDialog || isPositionedOverlay)
+        && el.getAttribute("aria-hidden") !== "true";
+    });
+  }
+
   function isNearestBlockingPopupOpen() {
-    return isBookingOptionPopupOpen() || isAdBannerPopupOpen();
+    return isBookingOptionPopupOpen()
+      || isAdBannerPopupOpen()
+      || isVisibleFullMenuOpen()
+      || isVisibleKorailModalOpen();
   }
 
   function isGlobalMainPage() {
@@ -128,11 +187,11 @@ waitForL(() => {
       document.getElementById("korail-main-toggle-btn"),
       document.getElementById("korail-main-toggle-host"),
     ].forEach((el) => {
-      if (el) el.classList.toggle("is-korail-muted", disabled);
+      if (!el) return;
+      el.classList.toggle("is-korail-muted", disabled);
+      if (el.matches("button")) el.disabled = disabled;
     });
   }
-
-  // 홈 화면 빠른 메뉴 영역의 위치 정보를 찾습니다.
 
   function findHomeQuickMenu() {
     const normalize = (text) => text.replace(/\s+/g, "");
@@ -143,9 +202,9 @@ waitForL(() => {
       .map((label) => textNodes
         .filter((el) => {
           const rect = el.getBoundingClientRect();
-          if (rect.width === 0 || rect.height === 0) return false;
-          if (rect.top < window.innerHeight * 0.22) return false;
-          return normalize(el.textContent || "").includes(label);
+          return rect.width > 0
+            && rect.height > 0
+            && normalize(el.textContent || "").includes(label);
         })
         .sort((a, b) => {
           const aLength = normalize(a.textContent || "").length;
@@ -166,6 +225,7 @@ waitForL(() => {
 
     return { left, top, right, bottom, width: right - left, height: bottom - top };
   }
+
   let homePanelMiniOpen = false;
   // 홈 화면 우측 패널 요소를 찾습니다.
   function getHomeSidePanel() {
@@ -201,56 +261,21 @@ waitForL(() => {
 
   // 좁은 화면에서 홈 패널 배치 기준 영역을 계산합니다.
 
-  function getCompactHomeLayout() {
-    const banner = document.querySelector(".pop_slide")?.closest("div");
-    const sidePanel = getHomeSidePanel();
-    const sideItems = getHomeSidePanelItems();
-    const previousTransforms = sideItems.map((el) => el.style.transform);
-    sideItems.forEach((el) => { el.style.transform = ""; });
-
-    const bannerRect = banner?.getBoundingClientRect();
-    const sideRect = sidePanel?.getBoundingClientRect();
-    if (window.innerWidth > 640 || !bannerRect || !sideRect) {
-      sideItems.forEach((el, index) => { el.style.transform = previousTransforms[index]; });
-      return null;
-    }
-
-    const marginX = 14;
-    const gap = 12;
-    const panelWidth = Math.min(210, Math.max(180, window.innerWidth * 0.44));
-    const desiredSideLeft = marginX + panelWidth + gap;
-    const shift = Math.max(0, desiredSideLeft - sideRect.left);
-
-    sideItems.forEach((el, index) => { el.style.transform = previousTransforms[index]; });
-    return { marginX, panelWidth, shift };
-  }
 
   // 좁은 화면용 가까운 역 패널 위치를 지정합니다.
 
-  function positionCompactHomePanel(panel) {
-    const sidePanel = getHomeSidePanel();
-    const layout = getCompactHomeLayout();
-    if (!sidePanel || !layout) return false;
-
-    setHomeSidePanelShift(layout.shift);
-    const shiftedRects = getHomeSidePanelItems().map((el) => el.getBoundingClientRect());
-    const shiftedSideTop = Math.min(...shiftedRects.map((rect) => rect.top));
-
-    panel.style.display = "";
-    panel.style.position = "absolute";
-    panel.style.top = `${shiftedSideTop + window.scrollY}px`;
-    panel.style.left = `${layout.marginX + window.scrollX}px`;
-    panel.style.width = `${layout.panelWidth}px`;
-    panel.style.zIndex = "9999";
-    panel.style.height = "";
-    return true;
-  }
 
   // 홈 화면 가까운 역 패널의 위치와 크기를 배치합니다.
 
   function positionHomeNearestPanel(panel) {
     if (location.pathname.includes("/intro")) return;
-    const rect = findHomeQuickMenu() || getHomeSidePanel()?.getBoundingClientRect();
+    const fullMenuOpen = isVisibleFullMenuOpen();
+    if (fullMenuOpen && panel.style.left && panel.style.top) {
+      updateNearestDisabledState();
+      return;
+    }
+    const rect = (fullMenuOpen ? null : findHomeQuickMenu())
+      || getHomeSidePanel()?.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const gap = Math.max(5, viewportWidth * 0.009);
     const marginX = Math.max(5, viewportWidth * 0.005);
@@ -266,27 +291,12 @@ waitForL(() => {
     const banner = document.querySelector(".pop_slide")?.closest("div");
     const bannerRect = banner?.getBoundingClientRect();
     const bannerTop = bannerRect ? bannerRect.top : baseRect.top;
-    const panelHeight = baseRect.bottom - bannerTop;
-
-    if (positionCompactHomePanel(panel)) {
-      homePanelMiniOpen = true;
-      hideMiniButton();
-      updateNearestDisabledState();
-      return;
-    }
 
     // 공간이 충분한지 확인
     const hasRightSpace = baseRect.right + gap + panelWidth <= viewportWidth - marginX;
     //const hasLeftSpace = baseRect.left - panelWidth - gap >= marginX;
 
-    if (!hasRightSpace) {
-      if (positionCompactHomePanel(panel)) {
-        homePanelMiniOpen = true;
-        hideMiniButton();
-        updateNearestDisabledState();
-        return;
-      }
-
+    if (viewportWidth <= 640 || !hasRightSpace) {
       showMiniButton(bannerRect, baseRect);
       updateNearestDisabledState();
       const miniBtn = document.getElementById("korail-nearest-mini-btn");
@@ -315,14 +325,14 @@ waitForL(() => {
     panel.style.position = "absolute";
     panel.style.top = `${bannerTop + window.scrollY}px`;
     panel.style.left = `${left + window.scrollX}px`;
-    if (panelHeight > 0) panel.style.height = `${panelHeight}px`;
+    panel.style.height = "";
+    panel.style.maxHeight = "";
+    panel.style.overflow = "visible";
   }
 
   // 미니 버튼 옆에 가까운 역 패널을 배치합니다.
 
   function positionMiniPanel(panel, btn) {
-    if (positionCompactHomePanel(panel)) return;
-
     setHomeSidePanelShift(0);
     const gap = 6;
     const btnRect = btn.getBoundingClientRect();
@@ -476,10 +486,10 @@ waitForL(() => {
 
   function findMainBookingControls() {
     const arrivals = [...document.querySelectorAll("a.btn_pop.btn_end, button.btn_pop.btn_end, .btn_pop.btn_end")]
-      .map((el) => ({ el, rect: getVisibleMainRect(el, 0.25) }))
+      .map((el) => ({ el, rect: getVisibleMainRect(el, -1) }))
       .filter((item) => item.rect);
     const lookups = [...document.querySelectorAll("button.btn_lookup, a.btn_lookup, .btn_lookup")]
-      .map((el) => ({ el, rect: getVisibleMainRect(el, 0.25) }))
+      .map((el) => ({ el, rect: getVisibleMainRect(el, -1) }))
       .filter((item) => item.rect);
 
     const pairs = [];
@@ -599,13 +609,6 @@ waitForL(() => {
 
   // 네이버 API 설정 값을 읽습니다.
 
-  function getNaverApiConfig() {
-    return {
-      clientId: window.KORAIL_MAP_CONFIG?.naverClientId?.trim() || "",
-      clientSecret: window.KORAIL_MAP_CONFIG?.naverClientSecret?.trim() || ""
-    };
-  }
-
   // HTML 삽입 전에 특수 문자를 이스케이프합니다.
 
   function escapeHtml(value) {
@@ -642,7 +645,11 @@ waitForL(() => {
         if (response.ok) {
           resolve(response.data);
         } else {
-          reject(new Error(buildGoogleApiError(response.error || "Naver API 요청에 실패했습니다.")));
+          const error = new Error(response.status === 429
+            ? (getKorailLocale() === "ko" ? "API 요청이 너무 많습니다. 1분 후 다시 시도해주세요." : "Too many API requests. Try again in one minute.")
+            : buildGoogleApiError(response.error || "Naver API 요청에 실패했습니다."));
+          error.status = response.status;
+          reject(error);
         }
       }
 
@@ -654,6 +661,48 @@ waitForL(() => {
         ...payload,
       }, "*");
     });
+  }
+
+  function requestNearestCache(action, key = "", entry = null) {
+    return new Promise((resolve, reject) => {
+      const requestId = `nearest-cache-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const timeoutId = setTimeout(() => {
+        window.removeEventListener("message", handleResponse);
+        reject(new Error("Nearest cache timed out."));
+      }, 3000);
+
+      function handleResponse(event) {
+        if (event.source !== window
+          || event.data?.type !== "KORAIL_NEAREST_CACHE_RESPONSE"
+          || event.data.requestId !== requestId) return;
+        clearTimeout(timeoutId);
+        window.removeEventListener("message", handleResponse);
+        if (event.data.ok) resolve(event.data.entry || null);
+        else reject(new Error(event.data.error || "Nearest cache failed."));
+      }
+
+      window.addEventListener("message", handleResponse);
+      window.postMessage({ type: "KORAIL_NEAREST_CACHE_REQUEST", requestId, action, key, entry }, "*");
+    });
+  }
+
+  function consumeNearestSearchQuota() {
+    const now = Date.now();
+    while (nearestSearchTimestamps.length && now - nearestSearchTimestamps[0] >= nearestSearchWindowMs) {
+      nearestSearchTimestamps.shift();
+    }
+    if (nearestSearchTimestamps.length >= nearestSearchLimit) {
+      const waitSeconds = Math.max(1, Math.ceil((nearestSearchWindowMs - (now - nearestSearchTimestamps[0])) / 1000));
+      throw new Error(getKorailLocale() === "ko"
+        ? `검색 요청이 너무 많습니다. ${waitSeconds}초 후 다시 시도해주세요.`
+        : `Too many searches. Try again in ${waitSeconds} seconds.`);
+    }
+    nearestSearchTimestamps.push(now);
+  }
+
+  async function clearNearestSearchCache() {
+    nearestSearchCache.clear();
+    await requestNearestCache("clear");
   }
 
   // 검색 대상 역 목록을 좌표와 함께 반환합니다.
@@ -702,6 +751,7 @@ waitForL(() => {
   function renderNearestResults(panel, state, message, stations = []) {
     const result = panel.querySelector("[data-nearest-result]");
     if (!result) return;
+    result.dataset.state = state;
 
     const stateLabel = {
       idle: t("enterAddress"),
@@ -718,32 +768,31 @@ waitForL(() => {
         <strong>${safeStateLabel}</strong>
         <small>${safeMessage}</small>
       `;
-      positionIntroNearestPanel(panel);
+      if (panel.id === HOME_PANEL_ID) positionIntroNearestPanel(panel);
       return;
     }
 
+    const showMajorBadges = panel.querySelector("[data-nearest-include-all]")?.checked === true;
+    const majorBadgeLabel = isKoreanLocale() ? "주요역" : "Major";
     result.innerHTML = `
       <span class="korail-nearest-card__result-label">TOP ${stations.length}</span>
       <ol class="korail-nearest-list">
         ${stations.map((station, index) => `
           <li>
             <span class="korail-nearest-list__rank">${index + 1}</span>
-            <span class="korail-nearest-list__name">${escapeHtml(stationName(station.name))}</span>
+            <span class="korail-nearest-list__name">${escapeHtml(stationName(station.name))}${showMajorBadges && STATIONS[station.name]?.major === true ? `<span class="korail-nearest-list__major">${majorBadgeLabel}</span>` : ""}</span>
             <span class="korail-nearest-list__meta">🚗 ${station.durationText} · 📍 ${station.distanceText}</span>
           </li>
         `).join("")}
       </ol>
     `;
-    positionIntroNearestPanel(panel);
+    if (panel.id === HOME_PANEL_ID) positionIntroNearestPanel(panel);
   }
 
   // 주소를 좌표로 변환합니다.
 
   async function geocodeAddress(address) {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=kr`;
-    const response = await fetch(url, { headers: { "Accept-Language": getRequestLanguage(), "User-Agent": "KorailMapExtension/1.0" } });
-    if (!response.ok) throw new Error(`${t("geocodeFailed")}: ${response.status}`);
-    const data = await response.json();
+    const data = await requestNaverApi("locationGeocode", { address });
     if (!data[0]) throw new Error(t("geocodeNotFound"));
     return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
   }
@@ -767,12 +816,13 @@ waitForL(() => {
   }
 
   async function reverseGeocodeLocation({ lat, lng }) {
-    const url = `https://nominatim.openstreetmap.org/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&format=json&zoom=18`;
-    const response = await fetch(url, { headers: { "Accept-Language": getRequestLanguage(), "User-Agent": "KorailMapExtension/1.0" } });
-    if (!response.ok) throw new Error(`${t("geocodeFailed")}: ${response.status}`);
-    const data = await response.json();
+    const data = await requestNaverApi("locationReverse", { lat, lng });
     if (!data.display_name) throw new Error(t("geocodeNotFound"));
     return data.display_name;
+  }
+
+  async function getCurrentLocationAddress() {
+    return reverseGeocodeLocation(await requestCurrentLocation());
   }
 
   async function fillCurrentLocation(panel) {
@@ -783,7 +833,7 @@ waitForL(() => {
     button.disabled = true;
     button.querySelector("[data-nearest-location-label]").textContent = t("locating");
     try {
-      const address = await reverseGeocodeLocation(await requestCurrentLocation());
+      const address = await getCurrentLocationAddress();
       input.value = address;
       input.focus();
     } catch (error) {
@@ -810,16 +860,23 @@ waitForL(() => {
       .slice(0, limit);
   }
 
+  function formatCachedNearestResults(results) {
+    return results.map((station) => ({
+      ...station,
+      durationText: formatDuration(station.durationSeconds),
+      distanceText: formatDistance(station.distanceMeters),
+    }));
+  }
+
   // 현재 위치에서 각 역까지의 길찾기 요약 정보를 조회합니다.
 
   async function getRoutesInfo(origin, stations) {
-    const { clientId, clientSecret } = getNaverApiConfig();
     let lastError = null;
     const results = [];
 
     for (const station of stations) {
       try {
-        const drivingData = await requestNaverApi("driving", { clientId, clientSecret, startLat: origin.lat, startLng: origin.lng, goalLat: station.lat, goalLng: station.lng });
+        const drivingData = await requestNaverApi("driving", { startLat: origin.lat, startLng: origin.lng, goalLat: station.lat, goalLng: station.lng });
         const drivingSummary = drivingData.route?.trafast?.[0]?.summary;
         if (!drivingSummary) continue;
         results.push({
@@ -832,6 +889,7 @@ waitForL(() => {
       } catch (error) {
         lastError = error;
         console.warn("[Korail] Naver driving request failed:", station.name, error);
+        if (error.status === 429) throw error;
       }
     }
 
@@ -841,37 +899,92 @@ waitForL(() => {
 
   // 입력 주소 기준 가까운 주요 역 검색을 실행합니다.
 
-  async function searchNearestStations(panel) {
-    const input = panel.querySelector("[data-nearest-address]");
-    const address = input?.value.trim().replace(/([가-힣])\s+(\d+(길|로|가))/g, "$1$2");
-    if (!address) {
-      renderNearestResults(panel, "error", t("enterAddressError"));
-      input?.focus();
-      return;
-    }
-    try {
-      renderNearestResults(panel, "loading", t("calculating"));
-      const includeAllStations = panel.querySelector("[data-nearest-include-all]")?.checked === true;
-      const candidateLimit = includeAllStations ? 8 : 5;
-      const resultLimit = includeAllStations ? 5 : 3;
-      const cacheKey = getNearestSearchCacheKey(address, includeAllStations);
-      const cachedResults = nearestSearchCache.get(cacheKey);
+  async function findNearestStationResults(address, includeAllStations = false) {
+    const normalizedAddress = String(address || "").trim().replace(/([가-힣])\s+(\d+(길|로|가))/g, "$1$2");
+    if (!normalizedAddress) throw new Error(t("enterAddressError"));
 
-      if (cachedResults) {
-        await wait(1000);
-        renderNearestResults(panel, "done", t("nearestStations"), cachedResults.slice(0, resultLimit));
-        return;
+    const candidateLimit = includeAllStations ? 8 : 5;
+    const resultLimit = includeAllStations ? 5 : 3;
+    const cacheKey = getNearestSearchCacheKey(normalizedAddress, includeAllStations);
+    const cachedResults = nearestSearchCache.get(cacheKey);
+    if (cachedResults) {
+      await requestNearestCache("set", cacheKey, {
+        savedAt: Date.now(),
+        address: normalizedAddress,
+        includeAllStations,
+        results: cachedResults,
+      }).catch(() => null);
+      return cachedResults.slice(0, resultLimit);
+    }
+    if (pendingNearestSearches.has(cacheKey)) {
+      const results = await pendingNearestSearches.get(cacheKey);
+      return results.slice(0, resultLimit);
+    }
+
+    const search = (async () => {
+      const stored = await requestNearestCache("get", cacheKey).catch(() => null);
+      if (stored && Date.now() - stored.savedAt <= nearestCacheTtlMs && Array.isArray(stored.results)) {
+        const storedResults = formatCachedNearestResults(stored.results);
+        nearestSearchCache.set(cacheKey, storedResults);
+        await requestNearestCache("set", cacheKey, {
+          savedAt: Date.now(),
+          address: normalizedAddress,
+          includeAllStations,
+          results: storedResults,
+        }).catch(() => null);
+        return storedResults;
       }
 
-      const origin = await geocodeAddress(address);
+      consumeNearestSearchQuota();
+      const origin = await geocodeAddress(normalizedAddress);
       const candidateStations = getNearestByDistance(origin, candidateLimit, includeAllStations);
       const results = await getRoutesInfo(origin, candidateStations);
-      if (!results.length) throw new Error("Naver Direction 5 결과를 가져오지 못했습니다.");
+      if (!results.length) throw new Error("Naver Direction 결과를 가져오지 못했습니다.");
       results.sort((a, b) => a.durationSeconds - b.durationSeconds);
-      nearestSearchCache.set(cacheKey, results.map((station) => ({ ...station })));
-      renderNearestResults(panel, "done", t("nearestStations"), results.slice(0, resultLimit));
+      const savedResults = results.map((station) => ({ ...station }));
+      nearestSearchCache.set(cacheKey, savedResults);
+      await requestNearestCache("set", cacheKey, {
+        savedAt: Date.now(),
+        address: normalizedAddress,
+        includeAllStations,
+        results: savedResults,
+      }).catch(() => null);
+      return savedResults;
+    })();
+
+    pendingNearestSearches.set(cacheKey, search);
+    try {
+      const results = await search;
+      return results.slice(0, resultLimit);
+    } finally {
+      pendingNearestSearches.delete(cacheKey);
+    }
+  }
+
+  async function searchNearestStations(panel) {
+    const input = panel.querySelector("[data-nearest-address]");
+    const submit = panel.querySelector("[data-nearest-submit], button[type='submit']");
+    if (panel.dataset.nearestSearchBusy === "true") return;
+    panel.dataset.nearestSearchBusy = "true";
+    if (submit) submit.disabled = true;
+    const startedAt = Date.now();
+    const minimumLoadingMs = 500 + Math.floor(Math.random() * 501);
+    try {
+      renderNearestResults(panel, "loading", t("calculating"));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const includeAllStations = panel.querySelector("[data-nearest-include-all]")?.checked === true;
+      const results = await findNearestStationResults(input?.value, includeAllStations);
+      const remainingLoadingMs = minimumLoadingMs - (Date.now() - startedAt);
+      if (remainingLoadingMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remainingLoadingMs));
+      }
+      renderNearestResults(panel, "done", t("nearestStations"), results);
     } catch (error) {
       renderNearestResults(panel, "error", error.message || t("searchError"));
+      if (!input?.value.trim()) input?.focus();
+    } finally {
+      delete panel.dataset.nearestSearchBusy;
+      if (submit) submit.disabled = false;
     }
   }
 
@@ -882,8 +995,78 @@ waitForL(() => {
     return `${includeAllStations ? "all" : "major"}:${normalizedAddress}`;
   }
 
-  function wait(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  function closeNearestHistory(panel) {
+    const history = panel.querySelector("[data-nearest-history]");
+    const toggle = panel.querySelector("[data-nearest-history-toggle]");
+    if (history) history.hidden = true;
+    toggle?.setAttribute("aria-expanded", "false");
+  }
+
+  function renderNearestHistory(panel, entries) {
+    const history = panel.querySelector("[data-nearest-history]");
+    if (!history) return;
+    history.replaceChildren();
+
+    if (!entries.length) {
+      const empty = document.createElement("span");
+      empty.className = "korail-nearest-history__empty";
+      empty.textContent = getKorailLocale() === "ko" ? "최근 입력 기록이 없습니다." : "No recent searches.";
+      history.appendChild(empty);
+      return;
+    }
+
+    entries.forEach((entry) => {
+      const item = document.createElement("div");
+      item.className = "korail-nearest-history__item";
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "korail-nearest-history__remove";
+      remove.dataset.historyRemove = entry.key;
+      remove.setAttribute("aria-label", getKorailLocale() === "ko" ? `${entry.address} 기록 삭제` : `Remove ${entry.address} from history`);
+      remove.textContent = "×";
+
+      const select = document.createElement("button");
+      select.type = "button";
+      select.className = "korail-nearest-history__select";
+      select.dataset.historySelect = "true";
+      select.dataset.address = entry.address;
+      select.dataset.includeAll = String(entry.includeAllStations);
+
+      const address = document.createElement("span");
+      address.className = "korail-nearest-history__address";
+      address.textContent = entry.address;
+
+      const option = document.createElement("span");
+      option.className = "korail-nearest-history__option";
+      option.textContent = getKorailLocale() === "ko"
+        ? (entry.includeAllStations ? "일반역 포함" : "주요역만")
+        : (entry.includeAllStations ? "All stations" : "Major only");
+
+      select.append(address, option);
+      item.append(remove, select);
+      history.appendChild(item);
+    });
+  }
+
+  async function toggleNearestHistory(panel) {
+    const history = panel.querySelector("[data-nearest-history]");
+    const toggle = panel.querySelector("[data-nearest-history-toggle]");
+    if (!history || !toggle) return;
+    if (!history.hidden) {
+      closeNearestHistory(panel);
+      return;
+    }
+
+    toggle.setAttribute("aria-expanded", "true");
+    history.hidden = false;
+    history.replaceChildren();
+    const loading = document.createElement("span");
+    loading.className = "korail-nearest-history__empty";
+    loading.textContent = getKorailLocale() === "ko" ? "기록을 불러오는 중입니다." : "Loading history.";
+    history.appendChild(loading);
+    const entries = await requestNearestCache("list").catch(() => []);
+    renderNearestHistory(panel, Array.isArray(entries) ? entries : []);
   }
 
   // 가까운 역 패널의 검색 이벤트를 연결합니다.
@@ -895,6 +1078,32 @@ waitForL(() => {
       searchNearestStations(panel);
     });
     panel.querySelector("[data-nearest-current-location]")?.addEventListener("click", () => fillCurrentLocation(panel));
+    panel.querySelector("[data-nearest-history-toggle]")?.addEventListener("click", () => toggleNearestHistory(panel));
+    panel.querySelector("[data-nearest-history]")?.addEventListener("click", async (event) => {
+      const remove = event.target.closest("[data-history-remove]");
+      if (remove) {
+        remove.disabled = true;
+        try {
+          await requestNearestCache("hide", remove.dataset.historyRemove);
+        } catch {
+          remove.disabled = false;
+          return;
+        }
+        remove.closest(".korail-nearest-history__item")?.remove();
+        const history = panel.querySelector("[data-nearest-history]");
+        if (history && !history.children.length) renderNearestHistory(panel, []);
+        return;
+      }
+
+      const item = event.target.closest("[data-history-select]");
+      if (!item) return;
+      const input = panel.querySelector("[data-nearest-address]");
+      const includeAll = panel.querySelector("[data-nearest-include-all]");
+      if (input) input.value = item.dataset.address || "";
+      if (includeAll) includeAll.checked = item.dataset.includeAll === "true";
+      closeNearestHistory(panel);
+      input?.focus();
+    });
   }
 
   // 가까운 역 패널의 기본 HTML을 렌더링합니다.
@@ -910,7 +1119,11 @@ waitForL(() => {
           <p>${t("nearestDescription")}</p>
         </div>
         <form class="korail-nearest-search" data-nearest-form>
-          <label class="korail-nearest-search__label" for="korail-nearest-address">${t("departureLocation")}</label>
+          <div class="korail-nearest-search__label-row">
+            <label class="korail-nearest-search__label" for="korail-nearest-address">${t("departureLocation")}</label>
+            <button type="button" class="korail-nearest-history-button" data-nearest-history-toggle aria-expanded="false" aria-controls="korail-nearest-history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5M12 7v5l3 2"></path></svg><span>${getKorailLocale() === "ko" ? "최근 기록" : "History"}</span></button>
+          </div>
+          <div id="korail-nearest-history" class="korail-nearest-history" data-nearest-history hidden></div>
           <div class="korail-nearest-search__row">
             <input id="korail-nearest-address" data-nearest-address type="text" placeholder="${t("addressPlaceholder")}" autocomplete="street-address">
             <button type="submit" class="korail-nearest-card__button">${t("search")}</button>
@@ -1086,14 +1299,36 @@ waitForL(() => {
     document.body.appendChild(toggleHost);
     bindHomeNearestPanel(panel);
 
+    function mountToggleHost(container) {
+      if (mainToggleContainer === container) return;
+      resetMainToggleContainer();
+      if (container !== document.body && getComputedStyle(container).position === "static") {
+        container.dataset.korailMainToggleOriginalPosition = container.style.position;
+        container.dataset.korailMainTogglePositioned = "true";
+        container.style.position = "relative";
+      }
+      container.appendChild(toggleHost);
+      mainToggleContainer = container;
+    }
+
     function positionToggleBtn() {
       const controls = findMainBookingControls();
+      if (!controls && mainToggleContainer?.isConnected && mainToggleContainer !== document.body) return;
       const arrivalBtn = controls?.arrival || null;
       const lookupBtn = controls?.lookup || null;
       const fallbackSearchBtn = lookupBtn || findIntroSearchButton();
       const toggleHeight = 42;
+      const container = arrivalBtn?.closest(".ticketWrap")
+        || lookupBtn?.closest(".ticketWrap")
+        || controls?.area
+        || document.body;
+      mountToggleHost(container);
+      const containerRect = container === document.body ? null : container.getBoundingClientRect();
 
-      const arrivalRect = arrivalBtn?.getBoundingClientRect();
+      const arrivalRect = [...document.querySelectorAll("a.btn_pop.btn_end")]
+        .filter((el) => !controls?.area || controls.area.contains(el))
+        .map((el) => getVisibleMainRect(el, -1))
+        .find(Boolean) || arrivalBtn?.getBoundingClientRect();
       const lookupRect = lookupBtn?.getBoundingClientRect();
       const fallbackRect = fallbackSearchBtn?.getBoundingClientRect();
       const toggleWidth = Math.max(120, Math.round((lookupRect || fallbackRect)?.width || 210));
@@ -1132,13 +1367,20 @@ waitForL(() => {
         window.scrollX + window.innerWidth - toggleWidth / 2 - 10,
       );
       const top = arrivalRect
-        ? Math.max(10, yRect.top + (yRect.height - toggleHeight) / 2)
-        : Math.max(window.scrollY + 10, yRect.top - toggleHeight - 28);
+        ? containerRect
+          ? arrivalRect.top - containerRect.top
+          : Math.max(window.scrollY + 10, arrivalRect.top + window.scrollY)
+        : containerRect
+          ? Math.max(10, yRect.top - window.scrollY - containerRect.top - toggleHeight - 28)
+          : Math.max(window.scrollY + 10, yRect.top - toggleHeight - 28);
+      const hostLeft = containerRect
+        ? left - window.scrollX - containerRect.left
+        : left;
 
       toggleHost.style.cssText = `
         position: absolute;
         top: ${top}px;
-        left: ${left}px;
+        left: ${hostLeft}px;
         transform: translateX(-50%);
         z-index: 9999;
         width: ${toggleWidth}px;
@@ -1169,10 +1411,44 @@ waitForL(() => {
       `;
     }
 
+    function layoutRectKey(rect, containerRect) {
+      return rect
+        ? [
+          rect.top - (containerRect?.top || 0),
+          rect.left - (containerRect?.left || 0),
+          rect.width,
+          rect.height,
+        ].map((value) => value.toFixed(2)).join(",")
+        : "";
+    }
+
+    function mainLayoutKey() {
+      const controls = findMainBookingControls();
+      if (!controls) return mainToggleContainer?.isConnected ? "mounted" : "";
+      const container = controls.arrival?.closest(".ticketWrap")
+        || controls.lookup?.closest(".ticketWrap")
+        || controls.area;
+      const containerRect = container?.getBoundingClientRect();
+      return [
+        containerRect ? `${containerRect.width.toFixed(2)},${containerRect.height.toFixed(2)}` : "",
+        layoutRectKey(controls.arrival?.getBoundingClientRect(), containerRect),
+        layoutRectKey(controls.lookup?.getBoundingClientRect(), containerRect),
+      ].join("|");
+    }
+
     positionToggleBtn();
-    [250, 750, 1500].forEach((delay) => {
-      window.setTimeout(positionToggleBtn, delay);
-    });
+    let previousLayoutKey = mainLayoutKey();
+    function watchMainLayout() {
+      if (!toggleHost.isConnected) return;
+      const nextLayoutKey = mainLayoutKey();
+      if (nextLayoutKey !== previousLayoutKey) {
+        previousLayoutKey = nextLayoutKey;
+        positionToggleBtn();
+        positionIntroNearestPanel(panel);
+      }
+      mainToggleWatchRaf = window.requestAnimationFrame(watchMainLayout);
+    }
+    mainToggleWatchRaf = window.requestAnimationFrame(watchMainLayout);
     updateNearestDisabledState();
 
     let relayoutRaf = 0;
@@ -1224,7 +1500,7 @@ waitForL(() => {
       document.getElementById("korail-main-toggle-btn"),
       document.getElementById("korail-main-toggle-host"),
     ].forEach((el) => {
-      if (el) el.style.zIndex = behind ? "0" : "";
+      if (el) el.classList.toggle("is-korail-muted", behind);
     });
   }
   
@@ -1250,7 +1526,7 @@ waitForL(() => {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["class", "style", "aria-hidden"],
+      attributeFilter: ["class", "style", "aria-hidden", "hidden"],
     });
     syncPopupState();
   }
@@ -1264,5 +1540,9 @@ waitForL(() => {
     updateNearestDisabledState,
     positionHomeNearestPanel,
     injectHomeNearestPanel,
+    findNearestStationResults,
+    getCurrentLocationAddress,
+    renderNearestResults,
+    clearNearestSearchCache,
   };
 }); // waitForL

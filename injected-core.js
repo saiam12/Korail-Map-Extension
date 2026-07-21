@@ -207,6 +207,57 @@ waitForL(() => {
     return findStationKeyInText(nearbyText);
   }
 
+  // 한글/글로벌 사이트의 전체메뉴는 화면마다 클래스명이 달라질 수 있어
+  // 알려진 클래스와 실제로 펼쳐진 메뉴 제목/크기를 함께 확인합니다.
+  function isVisibleFullMenuOpen() {
+    const isVisibleLargeMenu = (el) => {
+      if (!el || el === document.body || el === document.documentElement) return false;
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return rect.width >= Math.min(280, window.innerWidth * 0.3)
+        && rect.height >= Math.min(160, window.innerHeight * 0.22)
+        && rect.right > 0
+        && rect.bottom > 0
+        && rect.left < window.innerWidth
+        && rect.top < window.innerHeight
+        && style.display !== "none"
+        && style.visibility !== "hidden"
+        && Number.parseFloat(style.opacity || "1") > 0
+        && el.getAttribute("aria-hidden") !== "true";
+    };
+
+    const menuSelectors = [
+      ".allmenu_Wrap",
+      ".allMenuWrap",
+      ".all_menu_wrap",
+      ".all-menu-wrap",
+      ".fullMenu",
+      ".full-menu",
+      ".full_menu",
+      "[class*='allmenu' i]",
+      "[id*='allmenu' i]",
+      "[class*='fullmenu' i]",
+      "[id*='fullmenu' i]",
+    ].join(", ");
+    if ([...document.querySelectorAll(menuSelectors)].some(isVisibleLargeMenu)) return true;
+
+    const titlePattern = /^(full\s*menu|전체\s*메뉴)$/i;
+    return [...document.querySelectorAll("h1, h2, h3, h4, strong, span, p, div")]
+      .some((el) => {
+        if (!titlePattern.test((el.textContent || "").replace(/\s+/g, " ").trim())) return false;
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return rect.width >= 40
+          && rect.height >= 15
+          && rect.right > 0
+          && rect.bottom > 0
+          && rect.left < window.innerWidth
+          && rect.top < window.innerHeight
+          && style.display !== "none"
+          && style.visibility !== "hidden";
+      });
+  }
+
   window.KORAIL_SHARED = {
     HOME_PANEL_ID,
     QUICK_MENU_TEXTS,
@@ -223,6 +274,7 @@ waitForL(() => {
     stationKey,
     findStationKeyInText,
     getCurrentStationKey,
+    isVisibleFullMenuOpen,
   };
   window.KORAIL_I18N = { getLocale: getKorailLocale, t, stationName, stationKey };
 

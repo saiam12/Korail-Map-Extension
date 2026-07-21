@@ -1,8 +1,10 @@
+importScripts("background-config.js");
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (!request) return false;
+  if (!request || !isKorailSender(sender)) return false;
 
   if (request.type === "KORAIL_SUPPORT_SUBMIT") {
-    handleSupportSubmit(request)
+    handleSupportSubmit(request, sender)
       .then(() => sendResponse({ ok: true }))
       .catch((error) => sendResponse({ ok: false, error: error.message || "Feedback submission failed." }));
     return true;
@@ -10,102 +12,102 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.type !== "KORAIL_MAP_API_REQUEST") return false;
 
-  console.info("[Korail Map] API request received:", request.kind);
   handleNaverApiRequest(request)
-    .then((data) => {
-      console.info("[Korail Map] API request completed:", request.kind, data.status || "OK");
-      sendResponse({ ok: true, data });
-    })
+    .then((data) => sendResponse({ ok: true, data }))
     .catch((error) => sendResponse({
       ok: false,
       error: `Background fetch failed: ${error.message || "API request failed."}`,
+      status: error.status,
     }));
-
   return true;
 });
 
-async function handleSupportSubmit(request) {
-  const endpoint = new URL(request.endpoint || "");
+function isKorailSender(sender) {
+  return /^https:\/\/(www\.)?korail\.com\//.test(sender.tab?.url || sender.url || "");
+}
+
+async function handleSupportSubmit(request, sender) {
+  const endpoint = new URL(self.KORAIL_BACKGROUND_CONFIG?.supportFeedbackEndpoint || "");
   if (endpoint.protocol !== "https:" || endpoint.hostname !== "formspree.io") {
     throw new Error("Invalid feedback endpoint.");
   }
 
+  const payload = request.payload || {};
   const response = await fetch(endpoint.href, {
     method: "POST",
     headers: {
       "Accept": "application/json",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(request.payload || {}),
+    body: JSON.stringify({
+      category: payload.category,
+      message: payload.message,
+      contact: payload.contact,
+      pageUrl: sender.tab?.url || sender.url || "",
+      locale: typeof payload.locale === "string" ? payload.locale.slice(0, 20) : "unknown",
+    }),
   });
   if (!response.ok) throw new Error(`Feedback submission failed: ${response.status}`);
 }
 
 async function handleNaverApiRequest(request) {
-  console.warn("[Korail Map] request:", {
-    kind: request.kind,
-    hasClientId: !!request.clientId,
-    hasClientSecret: !!request.clientSecret,
-    startLat: request.startLat,
-    startLng: request.startLng,
-    goalLat: request.goalLat,
-    goalLng: request.goalLng,
-  });
-  const headers = {
-    "x-ncp-apigw-api-key-id": request.clientId,
-    "x-ncp-apigw-api-key": request.clientSecret,
-  };
+  const configuredUrl = self.KORAIL_BACKGROUND_CONFIG?.naverProxyUrl?.trim() || "";
+  if (!configuredUrl) throw new Error("Naver Maps proxy URL is not configured.");
 
-  if (request.kind === "geocode") {
-    const url = `https://maps.apigw.ntruss.com/map-geocode/v2/geocode?query=${encodeURIComponent(request.address)}`;
-    const response = await fetch(url, { headers });
-    const data = await response.json();
-    if (!response.ok || data.status !== "OK") {
-      throw new Error(data.errorMessage || `Geocoding 실패: ${response.status}`);
-    }
-    return data;
+  const proxyUrl = new URL(configuredUrl);
+  if (proxyUrl.protocol !== "https:") throw new Error("Naver Maps proxy must use HTTPS.");
+  if (!["geocode", "driving", "locationGeocode", "locationReverse"].includes(request.kind)) throw new Error("Unknown API request.");
+
+  if (request.kind === "locationGeocode" || request.kind === "locationReverse") {
+    const path = request.kind === "locationGeocode" ? "/v1/geocode" : "/v1/reverse-geocode";
+    const payload = request.kind === "locationGeocode"
+      ? { kind: request.kind, address: request.address }
+      : { kind: request.kind, lat: request.lat, lng: request.lng };
+    return requestProxy(new URL(path, proxyUrl.origin).href, payload);
   }
 
-  if (request.kind === "driving") {
-    validateCoordinate("start", request.startLat, request.startLng);
-    validateCoordinate("goal", request.goalLat, request.goalLng);
-
-    const query = `start=${request.startLng},${request.startLat}&goal=${request.goalLng},${request.goalLat}&option=trafast`;
-    const url = `https://maps.apigw.ntruss.com/map-direction/v1/driving?${query}`;
-    const data = await requestJson(url, headers, "Direction 5");
-    if (data.code !== 0) {
-      throw new Error(data.message || `Directions 실패: code ${data.code}`);
-    }
-    return data;
-  }
-
-  throw new Error("Unknown API request.");
+  const payload = request.kind === "geocode"
+    ? { kind: request.kind, address: request.address }
+    : {
+      kind: request.kind,
+      startLat: request.startLat,
+      startLng: request.startLng,
+      goalLat: request.goalLat,
+      goalLng: request.goalLng,
+    };
+  return requestProxy(proxyUrl.href, payload);
 }
 
-async function requestJson(url, headers, label) {
-  let response;
-  try {
-    response = await fetch(url, { headers });
-  } catch (error) {
-    throw new Error(`${label} fetch 실패: ${error.name || "Error"} ${error.message || error}`);
+async function requestProxy(url, payload) {
+  const installationId = await getInstallationId().catch(() => "");
+  const response = await requestMapsProxy(url, installationId ? { ...payload, installationId } : payload);
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data) {
+    const error = new Error(data?.message || data?.error || `Maps proxy HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
-
-  let data;
-  try {
-    data = await response.json();
-  } catch (error) {
-    throw new Error(`${label} 응답 파싱 실패: HTTP ${response.status}`);
-  }
-
-  if (!response.ok) {
-    throw new Error(data.message || data.errorMessage || `${label} HTTP ${response.status}`);
-  }
-
   return data;
 }
 
-function validateCoordinate(label, lat, lng) {
-  if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
-    throw new Error(`${label} 좌표가 올바르지 않습니다: ${lat},${lng}`);
-  }
+function requestMapsProxy(url, payload) {
+  const headers = {
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+    "X-Korail-Extension-Id": chrome.runtime.id,
+  };
+  return fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+}
+
+async function getInstallationId() {
+  const storageKey = "korail-installation-id";
+  const stored = await chrome.storage.local.get(storageKey);
+  if (/^[0-9a-f-]{36}$/i.test(stored[storageKey] || "")) return stored[storageKey];
+  const installationId = crypto.randomUUID();
+  await chrome.storage.local.set({ [storageKey]: installationId });
+  return installationId;
 }

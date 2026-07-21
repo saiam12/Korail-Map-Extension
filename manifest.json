@@ -2,8 +2,14 @@
   "manifest_version": 3,
   "name": "Korail 지도 패널",
   "version": "1.0",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "description": "Korail 열차 검색 결과에 정차역 지도를 표시합니다",
-  "permissions": ["scripting", "geolocation"],
+  "permissions": ["geolocation", "storage"],
   "background": {
     "service_worker": "background.js"
   },
@@ -11,8 +17,7 @@
     "https://www.korail.com/*",
     "https://korail.com/*",
     "https://formspree.io/*",
-    "https://maps.apigw.ntruss.com/*",
-    "https://nominatim.openstreetmap.org/*"
+    "https://korail-map-proxy.tkdldkas.workers.dev/*"
   ],
   "content_scripts": [
     {
@@ -31,7 +36,6 @@
         "station-data.js",
         "station-translations.js",
         "map-panel.js",
-        "api-config.js",
         "injected-core.js",
         "support-widget.js",
         "home-panel.js",

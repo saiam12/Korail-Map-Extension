@@ -25,6 +25,12 @@ waitForL(() => {
       const popup = document.querySelector(".layerWrap.type_tranin-station-pop_wrap");
       const existing = document.getElementById("korail-station-map-popup");
 
+      if (document.documentElement.dataset.korailStationSwap === "true") {
+        existing?.remove();
+        popup?.querySelector(".korail-station-tracking-toggle")?.remove();
+        return;
+      }
+
       if (popup && !existing) {
         setNearestPanelBehindPopup(true);
         showStationMapPopup(popup);

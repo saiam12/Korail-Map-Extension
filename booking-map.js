@@ -1,11 +1,19 @@
 // 예매 결과 지도와 선택 열차 정차역 표시 기능입니다.
 
 waitForL(() => {
-  const { HOME_PANEL_ID, stationName, stationKey, findStationKeyInText, getCurrentStationKey } = window.KORAIL_SHARED;
+  const {
+    HOME_PANEL_ID,
+    stationName,
+    stationKey,
+    findStationKeyInText,
+    getCurrentStationKey,
+    isVisibleFullMenuOpen,
+  } = window.KORAIL_SHARED;
   const { cleanup, cleanupHomeNearestPanel, isLoginPage, updateNearestDisabledState, positionHomeNearestPanel, injectHomeNearestPanel } = window.KORAIL_HOME;
 
   var isFetchingTrainStations = false;
   var activeTrainStationsRequestVersion = -1;
+  var completedTrainStationsRequestVersion = -1;
   var pendingTrainStationsRequest = null;
   var bottomTrainTimeTimer = null;
   var selectedTrainRow = null;
@@ -13,6 +21,360 @@ waitForL(() => {
   var selectedTrainRowVersion = 0;
   var selectedTransferRouteKey = "";
   var selectedTransferRouteGroups = new Map();
+  const trainTimeAutomationStorageKey = "korail-map-train-time-automation";
+  const isStoredToggleEnabled = (key) => {
+    try { return localStorage.getItem(key) !== "false"; }
+    catch { return true; }
+  };
+  const isTrainTimeAutomationEnabled = () => isStoredToggleEnabled(trainTimeAutomationStorageKey);
+
+  function getStationFields(type) {
+    const selectors = type === "dep"
+      ? ["#labelstart", "#txtGoStart", ".station_item.n1 span.input", "input[id*='start' i]", "input[name*='start' i]", "input[id*='dep' i]", "input[name*='dep' i]", "a.btn_pop.btn_start"]
+      : ["#labelend", "#txtGoEnd", ".station_item.n2 span.input", "input[id*='end' i]", "input[name*='end' i]", "input[id*='arr' i]", "input[name*='arr' i]", "a.btn_pop.btn_end"];
+
+    return [...new Set(selectors.flatMap((selector) => [...document.querySelectorAll(selector)]))];
+  }
+
+  function findVisibleStationField(type) {
+    if (isGlobalTicketPage()) {
+      const globalSelector = type === "dep" ? "a.btn_pop.btn_start" : "a.btn_pop.btn_end";
+      const globalField = [...document.querySelectorAll(globalSelector)].find((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      if (globalField) return globalField;
+    }
+    return getStationFields(type).find((el) => {
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    }) || null;
+  }
+
+  function getStationFieldValue(field) {
+    return String(("value" in field && typeof field.value === "string") ? field.value : field.textContent || "").trim();
+  }
+
+  function normalizeStationOptionText(value) {
+    return String(value || "").replace(/\s+/g, "").toLocaleLowerCase();
+  }
+
+  function matchesStationOption(el, stationName) {
+    const text = normalizeStationOptionText(el.textContent);
+    const name = normalizeStationOptionText(stationName);
+    return text === name || text === `${name}station` || text === `${name}역`;
+  }
+
+  function findStationPickerByOption(stationName) {
+    const matchingNodes = [...document.querySelectorAll("button, a, [role='button'], li, span, strong")]
+      .filter((el) => matchesStationOption(el, stationName));
+
+    for (const node of matchingNodes) {
+      let container = node.parentElement;
+      while (container && container !== document.body) {
+        const rect = container.getBoundingClientRect();
+        const optionCount = container.querySelectorAll("button, a, [role='button'], li").length;
+        const style = getComputedStyle(container);
+        const isOverlay = style.position === "fixed"
+          || container.matches(".layerWrap, .layer_wrap, [role='dialog'], [class*='popup'], [class*='modal']");
+        if (isOverlay && rect.width > 0 && rect.height > 0 && optionCount >= 4) return container;
+        container = container.parentElement;
+      }
+    }
+    return null;
+  }
+
+  function waitForStationPicker(stationName, timeout = 3000) {
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      function findPicker() {
+        const optionPicker = findStationPickerByOption(stationName);
+        if (optionPicker) return resolve(optionPicker);
+
+        const pickerSelector = ".layerWrap, .layer_wrap, [role='dialog'], [class*='popup'], [class*='modal']";
+        const searchInput = [...document.querySelectorAll("input")].find((input) => {
+          return /역\s*이름|초성\s*검색|station|search/i.test(input.placeholder || "")
+            && input.closest(pickerSelector);
+        });
+        if (searchInput) {
+          const picker = searchInput.closest(pickerSelector);
+          if (picker && picker.getBoundingClientRect().width > 0) return resolve(picker);
+        }
+        if (Date.now() - startedAt >= timeout) return resolve(null);
+        requestAnimationFrame(findPicker);
+      }
+      findPicker();
+    });
+  }
+
+  function findStationPickerOption(picker, stationName) {
+    return [...picker.querySelectorAll("button, a, [role='button'], li, span, strong")]
+      .filter((el) => matchesStationOption(el, stationName))
+      .map((el) => el.closest("button, a, [role='button'], li") || el)
+      .sort((a, b) => Number(!a.matches("button, a, [role='button']")) - Number(!b.matches("button, a, [role='button']")))
+      .find((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      }) || null;
+  }
+
+  async function chooseStationThroughPicker(type, stationName) {
+    const selector = type === "dep" ? "a.btn_pop.btn_start" : "a.btn_pop.btn_end";
+    const trigger = [...document.querySelectorAll(selector)].find((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+    if (!trigger) return false;
+
+    trigger.click();
+    const picker = await waitForStationPicker(stationName);
+    const option = picker && findStationPickerOption(picker, stationName);
+    if (!option) {
+      const closeButton = picker && [...picker.querySelectorAll("button, a")].find((el) => {
+        return /close|닫기|×|✕/i.test(`${el.textContent || ""} ${el.getAttribute("aria-label") || ""} ${el.title || ""}`);
+      });
+      closeButton?.click();
+      return false;
+    }
+
+    option.click();
+    return true;
+  }
+
+  async function swapStationsThroughPicker(depField, arrField) {
+    const displayedDep = getStationFieldValue(depField);
+    const displayedArr = getStationFieldValue(arrField);
+    const depKey = getCurrentStationKey("dep") || findStationKeyInText(displayedDep);
+    const arrKey = getCurrentStationKey("arr") || findStationKeyInText(displayedArr);
+    const depStation = depKey ? stationName(depKey) : displayedDep;
+    const arrStation = arrKey ? stationName(arrKey) : displayedArr;
+    if (!depStation || !arrStation) return false;
+
+    const departureChanged = await chooseStationThroughPicker("dep", arrStation);
+    if (!departureChanged) return false;
+    return chooseStationThroughPicker("arr", depStation);
+  }
+
+  function shrinkVisibleStartField() {
+    const startButton = [...document.querySelectorAll("a.btn_pop.btn_start")].find((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+    const startField = startButton?.closest(".station_item") || startButton?.parentElement;
+    if (startField) startField.classList.add("korail-start-field-short");
+  }
+
+  function shiftArrivalLabel(arrField) {
+    const arrRect = arrField.getBoundingClientRect();
+    const label = [...document.querySelectorAll("label, span, strong, em, p, div")]
+      .filter((el) => (el.textContent || "").trim() === "도착역")
+      .filter((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      })
+      .sort((a, b) => {
+        const aRect = a.getBoundingClientRect();
+        const bRect = b.getBoundingClientRect();
+        return Math.abs(aRect.top - arrRect.top) + Math.abs(aRect.left - arrRect.left)
+          - Math.abs(bRect.top - arrRect.top) - Math.abs(bRect.left - arrRect.left);
+      })[0];
+    if (label) label.classList.add("korail-arrival-label-shift");
+  }
+
+  function resetStationFieldAdjustments() {
+    document.querySelectorAll(
+      ".korail-start-field-short, .korail-arrival-field-shift, .korail-arrival-label-shift, "
+        + ".korail-global-departure-field-short, .korail-global-arrival-field-short",
+    ).forEach((el) => {
+      el.classList.remove(
+        "korail-start-field-short",
+        "korail-arrival-field-shift",
+        "korail-arrival-label-shift",
+        "korail-global-departure-field-short",
+        "korail-global-arrival-field-short",
+      );
+      el.style.removeProperty("--korail-global-field-width");
+    });
+  }
+
+  function findNearestVisibleGlobalField(selector, referenceRect) {
+    return [...document.querySelectorAll(selector)]
+      .filter((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      })
+      .sort((a, b) => {
+        const aRect = a.getBoundingClientRect();
+        const bRect = b.getBoundingClientRect();
+        return Math.abs(aRect.left - referenceRect.left) + Math.abs(aRect.top - referenceRect.bottom)
+          - Math.abs(bRect.left - referenceRect.left) - Math.abs(bRect.top - referenceRect.bottom);
+      })[0] || null;
+  }
+
+  function adjustGlobalField(field, className) {
+    if (!field) return;
+    field.style.setProperty("--korail-global-field-width", `${field.getBoundingClientRect().width}px`);
+    field.classList.add(className);
+  }
+
+  function isStationSwapBlockingPopupOpen() {
+    if (isVisibleFullMenuOpen()) return true;
+
+    const selector = [
+      ".ReactModal__Content",
+      ".layerPopup",
+      ".layerWrap",
+      ".layer_wrap",
+      ".allmenu_Wrap",
+      "[role='dialog']",
+      "[aria-modal='true']",
+    ].join(", ");
+    const hasKorailModal = [...document.querySelectorAll(selector)].some((el) => {
+      if (el.matches(".event-pop") || el.closest(".event-pop")) return false;
+      if (el.closest(`#${HOME_PANEL_ID}, #korail-support-modal, #korail-map-panel, #korail-station-map-popup`)) return false;
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return rect.width > 0
+        && rect.height > 0
+        && style.display !== "none"
+        && style.visibility !== "hidden"
+        && el.getAttribute("aria-hidden") !== "true";
+    });
+    if (hasKorailModal) return true;
+
+    const visibleTexts = [...document.querySelectorAll("button, a, label, span, p, strong")]
+      .filter((el) => {
+        if (el.closest(`#${HOME_PANEL_ID}, #korail-support-modal`)) return false;
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return rect.width > 0
+          && rect.height > 0
+          && style.display !== "none"
+          && style.visibility !== "hidden";
+      })
+      .map((el) => (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase());
+    const hasAdDismissControl = visibleTexts.some((text) =>
+      text.includes("1일간 그만보기")
+      || text.includes("오늘 하루 보지 않기")
+      || text.includes("하루 동안 보지 않기")
+      || text.includes("don't show again today")
+      || text.includes("do not show again today")
+    );
+    const hasAdActions = visibleTexts.some((text) => text === "view details")
+      && visibleTexts.some((text) => text === "창닫기" || text === "close");
+    return hasAdDismissControl || hasAdActions;
+  }
+
+  function syncStationSwapBlockedState() {
+    const button = document.getElementById("korail-station-swap-btn");
+    if (!button) return;
+    const isBlocked = isStationSwapBlockingPopupOpen();
+    const isBusy = button.dataset.swapBusy === "true";
+    button.classList.toggle("korail-station-swap-btn--blocked", isBlocked);
+    button.disabled = isBlocked || isBusy;
+  }
+
+  function removeStationSwapButton() {
+    document.getElementById("korail-station-swap-btn")?.remove();
+    document.querySelectorAll(".korail-station-swap-container")
+      .forEach((el) => el.classList.remove("korail-station-swap-container"));
+  }
+
+  function syncStationSwapButton() {
+    if (!isStationSwapMainPage() || isLoginPage()) {
+      resetStationFieldAdjustments();
+      removeStationSwapButton();
+      return;
+    }
+
+    const isGlobal = isGlobalTicketPage();
+    if (isGlobal) resetStationFieldAdjustments();
+    else shrinkVisibleStartField();
+    let button = document.getElementById("korail-station-swap-btn");
+    const depField = findVisibleStationField("dep");
+    const arrField = findVisibleStationField("arr");
+    if (!depField || !arrField) {
+      removeStationSwapButton();
+      return;
+    }
+
+    if (!button) {
+      button = document.createElement("button");
+      button.id = "korail-station-swap-btn";
+      button.type = "button";
+      button.textContent = "⇄";
+      document.body.appendChild(button);
+
+      button.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (button.disabled) return;
+        const currentDep = findVisibleStationField("dep");
+        const currentArr = findVisibleStationField("arr");
+        if (!currentDep || !currentArr) return;
+
+        button.dataset.swapBusy = "true";
+        button.disabled = true;
+        const hideGlobalPicker = isGlobalTicketPage();
+        if (hideGlobalPicker) document.documentElement.dataset.korailStationSwap = "true";
+        try {
+          const swapped = await swapStationsThroughPicker(currentDep, currentArr);
+          if (!swapped) return;
+          cleanup();
+          tryInit();
+        } finally {
+          if (hideGlobalPicker) delete document.documentElement.dataset.korailStationSwap;
+          delete button.dataset.swapBusy;
+          syncStationSwapButton();
+        }
+      });
+    }
+
+    const swapLabel = isGlobal ? "Swap departure and arrival" : "출발역과 도착역 바꾸기";
+    button.title = swapLabel;
+    button.setAttribute("aria-label", swapLabel);
+    const swapContainer = depField.closest(".ticketWrap");
+    document.querySelectorAll(".korail-station-swap-container")
+      .forEach((el) => {
+        if (el !== swapContainer) el.classList.remove("korail-station-swap-container");
+      });
+    if (swapContainer) {
+      swapContainer.classList.add("korail-station-swap-container");
+      if (button.parentElement !== swapContainer) swapContainer.appendChild(button);
+      button.classList.add("korail-station-swap-btn--contained");
+    } else {
+      if (button.parentElement !== document.body) document.body.appendChild(button);
+      button.classList.remove("korail-station-swap-btn--contained");
+    }
+
+    if (isGlobal) {
+      const originalDepRect = depField.getBoundingClientRect();
+      const originalArrRect = arrField.getBoundingClientRect();
+      const departureField = depField.closest(".start") || depField;
+      const arrivalField = arrField.closest(".end") || arrField;
+      const dateField = findNearestVisibleGlobalField(".day_start", originalDepRect);
+      const passengersField = findNearestVisibleGlobalField(".total", originalArrRect);
+      adjustGlobalField(departureField, "korail-global-departure-field-short");
+      adjustGlobalField(dateField, "korail-global-departure-field-short");
+      adjustGlobalField(arrivalField, "korail-global-arrival-field-short");
+      adjustGlobalField(passengersField, "korail-global-arrival-field-short");
+    } else {
+      arrField.style.marginLeft = "";
+      const arrivalField = arrField.closest(".station_item") || arrField.parentElement;
+      if (arrivalField) arrivalField.classList.add("korail-arrival-field-shift");
+      shiftArrivalLabel(arrField);
+    }
+    const depRect = depField.getBoundingClientRect();
+    const arrRect = arrField.getBoundingClientRect();
+    const containerRect = swapContainer?.getBoundingClientRect();
+    const offsetLeft = containerRect ? containerRect.left - swapContainer.scrollLeft : 0;
+    const offsetTop = containerRect ? containerRect.top - swapContainer.scrollTop : 0;
+    button.style.left = `${(depRect.right + arrRect.left) / 2 - offsetLeft - 12}px`;
+    button.style.top = `${(depRect.top + depRect.bottom) / 2 - offsetTop - 12}px`;
+    button.style.display = "";
+    syncStationSwapBlockedState();
+  }
 
 function isGlobalTrainRow(el) {
   const text = (el?.textContent || "").replace(/\s+/g, " ");
@@ -42,10 +404,17 @@ function isGlobalTicketPage() {
   return location.pathname.includes("/global/");
 }
 
+function isStationSwapMainPage() {
+  const path = location.pathname.replace(/\/+$/, "");
+  return path === "/ticket/main"
+    || /\/global\/(eng|jpn|chn|tw|vi|th|id)\/main$/i.test(path);
+}
+
 const TRAIN_TIME_LABELS = [
   "열차시각", "Train Time", "Time", "列車時刻", "列车时刻", "時刻",
   "Giờ tàu", "Giờ khởi hành", "ตารางเวลา", "เวลาเดินรถ", "Jadwal Kereta", "Waktu Kereta",
 ];
+// const randomNumber = Math.floor(Math.random() * 101) + 100;
 
 function isTrainTimeButton(el) {
   const text = (el?.textContent || el?.getAttribute?.("aria-label") || "").trim().toLocaleLowerCase();
@@ -54,12 +423,16 @@ function isTrainTimeButton(el) {
 
 // 현재 페이지 상태에 맞춰 홈 패널 또는 예매 지도 패널을 초기화합니다.
 
-function tryInit() {
-  if (isLoginPage()) {
-    cleanup();
-    cleanupHomeNearestPanel();
-    return;
-  }
+  function tryInit() {
+    if (isLoginPage()) {
+      resetStationFieldAdjustments();
+      removeStationSwapButton();
+      cleanup();
+      cleanupHomeNearestPanel();
+      return;
+    }
+
+    syncStationSwapButton();
 
   const trainTable = getTrainTable();
   const depEl = document.querySelector("#labelstart");
@@ -106,6 +479,7 @@ function tryInit() {
 
 let tryInitTimer = null;
 const spaObserver = new MutationObserver(() => {
+  syncStationSwapBlockedState();
   clearTimeout(tryInitTimer);
   tryInitTimer = setTimeout(() => {
     tryInit();
@@ -116,25 +490,27 @@ spaObserver.observe(document.body, {
   childList: true,
   subtree: true,
   attributes: true,
-  attributeFilter: ["class", "style", "aria-hidden"],
+  attributeFilter: ["class", "style", "aria-hidden", "hidden"],
 });
-window.addEventListener("resize", () => {
+  window.addEventListener("resize", () => {
   if (isLoginPage()) {
     cleanupHomeNearestPanel();
     return;
   }
-  const panel = document.getElementById(HOME_PANEL_ID);
-  if (panel) positionHomeNearestPanel(panel);
-  updateNearestDisabledState();
+    const panel = document.getElementById(HOME_PANEL_ID);
+    if (panel) positionHomeNearestPanel(panel);
+    syncStationSwapButton();
+    updateNearestDisabledState();
 });
 let homePanelScrollFrame = null;
 window.addEventListener("scroll", () => {
   if (homePanelScrollFrame !== null) return;
-  homePanelScrollFrame = requestAnimationFrame(() => {
-    homePanelScrollFrame = null;
-    const panel = document.getElementById(HOME_PANEL_ID);
-    if (panel) positionHomeNearestPanel(panel);
-  });
+    homePanelScrollFrame = requestAnimationFrame(() => {
+      homePanelScrollFrame = null;
+      const panel = document.getElementById(HOME_PANEL_ID);
+      if (panel) positionHomeNearestPanel(panel);
+      if (!document.querySelector(".korail-station-swap-container")) syncStationSwapButton();
+    });
 }, { passive: true });
 tryInit();
 
@@ -236,7 +612,6 @@ function bindTrainRowClick(dep, arr) {
     const timeBtn = findSelectedBottomTrainTimeButton();
     if (!timeBtn) return;
 
-    // 버튼 텍스트+위치로 중복 실행 방지
     const btnKey = [
       timeBtn.textContent || "",
       timeBtn.getBoundingClientRect().top,
@@ -434,7 +809,7 @@ async function getTrainTimeButton(row, index = 0) {
 //   return btns[1] || btns[0] || null;
 // }
 
-// 열려 있는 모달을 닫고 사라질 때까지 기다립니다.
+// 열려 있는 모달이 사라질 때까지 기다립니다.
 
 function waitModalGone(timeout = 2000) {
   return new Promise((resolve) => {
@@ -446,9 +821,6 @@ function waitModalGone(timeout = 2000) {
     });
     obs.observe(document.body, { childList: true, subtree: true });
     setTimeout(() => { obs.disconnect(); resolve(); }, timeout);
-    if (!isInfoGuideModal(document.querySelector(".ReactModal__Content"))) {
-      document.querySelector(".ReactModal__Content .btn_close")?.click();
-    }
   });
 }
 
@@ -542,8 +914,9 @@ function waitTrainTimeStations(timeBtn) {
       settled = true;
       obs.disconnect();
       clearTimeout(timer);
-      // 닫기 버튼 클릭
-      document.querySelector(".ReactModal__Content .btn_close")?.click();
+      if (isTrainTimeAutomationEnabled() && Array.isArray(result) && result.length >= 2) {
+        document.querySelector(".ReactModal__Content .btn_close")?.click();
+      }
       resolve(result || []);
     };
 
@@ -555,9 +928,9 @@ function waitTrainTimeStations(timeBtn) {
         waitingForInfoGuide = false;
         if (!retriedAfterInfoGuide) {
           retriedAfterInfoGuide = true;
-          setTimeout(() => {
-            if (!settled) timeBtn.click();
-          }, 50);
+          // setTimeout(() => {
+          if (!settled && isTrainTimeAutomationEnabled()) timeBtn.click();
+          // }, 0);
           return;
         }
       }
@@ -578,7 +951,11 @@ function waitTrainTimeStations(timeBtn) {
       return;
     }
     if (immediate.type === "stations") { finish(immediate.stationNames); return; }
-    if (immediate.type === "none") timeBtn.click();
+    if (immediate.type === "none") {
+      // setTimeout(() => {
+      if (!settled && isTrainTimeAutomationEnabled()) timeBtn.click();
+      // }, randomNumber);
+    }
   });
 }
 
@@ -1007,6 +1384,7 @@ async function fetchStationsViaBottomBar(row, segmentDep, segmentArr) {
 // 단일/환승 여부를 .absol 존재로 판단하고 각각 처리합니다.
 
 async function fetchBottomBarTrainStations(dep, arr, requestVersion = selectedTrainRowVersion) {
+  if (requestVersion === completedTrainStationsRequestVersion) return;
   if (isFetchingTrainStations) {
     if (requestVersion !== activeTrainStationsRequestVersion) {
       pendingTrainStationsRequest = { dep, arr, requestVersion };
@@ -1045,6 +1423,7 @@ async function fetchBottomBarTrainStations(dep, arr, requestVersion = selectedTr
         activeStations: sliceTrainStations(stationNames, segmentDep, segmentArr, "auto"),
         transferStations,
       }]);
+      completedTrainStationsRequestVersion = requestVersion;
 
     } else {
       // 현재 하단바에 표시된 환승 열차시각 버튼을 모두 다시 조회합니다.
@@ -1098,6 +1477,7 @@ async function fetchBottomBarTrainStations(dep, arr, requestVersion = selectedTr
           activeStations: mergedActive,
           transferStations,
         }]);
+        completedTrainStationsRequestVersion = requestVersion;
       }
     }
   } finally {
