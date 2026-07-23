@@ -117,7 +117,7 @@ function initMap(container, dep, arr, stations, fullRoute) {
       html: `<div class="korail-dot-wrap ${isDep || isArr ? "is-label" : ""}">
                ${isDep || isArr
                   ? `<span class="korail-dot-label ${dotClass}">${korailDisplayStationName(name)}</span>`
-                 : `<div class="korail-dot> ${dotClass}"></div>`}
+                 : `<div class="korail-dot ${dotClass}"></div>`}
                <span class="korail-marker-hitarea" style="--korail-hit-size: 11px" aria-hidden="true"></span>
               </div>`,
       iconSize: isDep || isArr ? [0, 0] : [11, 11],
@@ -163,6 +163,8 @@ function initStationMap(container, popup, currentDep, currentArr) {
   }).addTo(map);
   addKorailMapLabelToggle(map, 12);
   const stationRenderer = L.canvas({ padding: 0.5 });
+  const stationMarkerBorderWeight = 1.5;
+  const stationMarkerRadius = (isMajor) => ((isMajor ? 11 : 9) - stationMarkerBorderWeight) / 2;
 
   // 모든 역 마커 생성 (초기엔 지도에 추가 안 함)
   const markers = {};
@@ -174,7 +176,6 @@ function initStationMap(container, popup, currentDep, currentArr) {
     const isCurrentArr = name === currentArr;
     const isMajor = coords.major === true;
     const dotClass = isCurrentDep ? "is-dep" : isCurrentArr ? "is-arr" : "is-gray";
-    const markerSize = isMajor ? 10 : 7;
 
     let marker;
     if (isCurrentDep || isCurrentArr) {
@@ -191,9 +192,9 @@ function initStationMap(container, popup, currentDep, currentArr) {
     } else {
       marker = L.circleMarker([coords.lat, coords.lng], {
         renderer: stationRenderer,
-        radius: markerSize / 2,
+        radius: stationMarkerRadius(isMajor),
         color: "#ffffff",
-        weight: 1.5,
+        weight: stationMarkerBorderWeight,
         fillColor: "#888888",
         fillOpacity: 1,
         opacity: 1,
@@ -274,7 +275,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
   const highlightIcon = (name, on) => {
     const marker = markers[name];
     if (typeof marker?.setStyle === "function" && typeof marker?.setRadius === "function") {
-      const baseRadius = STATIONS[name]?.major === true ? 5 : 3.5;
+      const baseRadius = stationMarkerRadius(STATIONS[name]?.major === true);
       marker.setStyle({ fillColor: on ? "#183D78" : "#888888" });
       marker.setRadius(on ? 6 : baseRadius);
       return;
@@ -355,6 +356,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
   } 
 
   let trackingTogglePositioned = false;
+  let activeStationTab = "";
   function attachTabEvents() {
     const activeTab = popup.querySelector(".tabPage.active") || popup;
     const items = activeTab.querySelectorAll(".travel-ch_list li");
@@ -373,6 +375,18 @@ function initStationMap(container, popup, currentDep, currentArr) {
       }
     }
 
+    if (isGlobalLocale) {
+      activeStationTab = "global";
+      const stationLists = [...items].filter((item) => getVisibleStationNames(item).length > 0);
+      showMajorStations();
+      stationLists.forEach((stationList) => attachStationHover(stationList));
+      return;
+    }
+
+    const stationTab = items.length >= 2 ? "region" : "major";
+    const enteredRegionTab = stationTab === "region" && activeStationTab !== "region";
+    activeStationTab = stationTab;
+
     if (items.length >= 2) {
       // 지역별 탭
       const regionList = items[0];
@@ -384,10 +398,9 @@ function initStationMap(container, popup, currentDep, currentArr) {
       const currentStationNames = isGlobalLocale
         ? getVisibleStationNames(stationList)
         : (REGION_STATIONS[activeRegionName] || []).filter(n => STATIONS[n]);
-      if (currentStationNames.length > 0 && !map._korailInitialized) {
-        map._korailInitialized = true;
+      if (currentStationNames.length > 0 && enteredRegionTab) {
         showOnlyStations(currentStationNames);
-        moveToRegionStations(currentStationNames, false);
+        moveToRegionStations(currentStationNames, true);
       }
 
       regionList.querySelectorAll("a, button").forEach((a) => {

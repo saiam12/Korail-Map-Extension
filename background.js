@@ -37,12 +37,14 @@ async function handleSupportSubmit(request, sender) {
     throw new Error("Invalid feedback endpoint.");
   }
 
+  const senderPage = new URL(sender.tab?.url || sender.url || "");
+
   const payload = request.payload || {};
   const formData = new URLSearchParams({
     category: payload.category || "",
     message: payload.message || "",
     contact: payload.contact || "",
-    pageUrl: sender.tab?.url || sender.url || "",
+    pageUrl: `${senderPage.origin}${senderPage.pathname}`,
     locale: typeof payload.locale === "string" ? payload.locale.slice(0, 20) : "unknown",
   });
   const response = await fetch(endpoint.href, {

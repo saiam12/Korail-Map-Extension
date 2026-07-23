@@ -15,15 +15,12 @@ waitForL(() => {
   const nearestCacheTtlMs = 7 * 24 * 60 * 60 * 1000;
   const nearestSearchWindowMs = 60 * 1000;
   const nearestSearchLimit = 5;
-  let mainToggleContainer = null;
+  let homePanelLayoutCleanup = () => {};
 
-  function resetMainToggleContainer() {
-    if (mainToggleContainer?.dataset.korailMainTogglePositioned === "true") {
-      mainToggleContainer.style.position = mainToggleContainer.dataset.korailMainToggleOriginalPosition || "";
-      delete mainToggleContainer.dataset.korailMainTogglePositioned;
-      delete mainToggleContainer.dataset.korailMainToggleOriginalPosition;
-    }
-    mainToggleContainer = null;
+  function clearHomePanelLayoutTracking() {
+    const cleanupLayout = homePanelLayoutCleanup;
+    homePanelLayoutCleanup = () => {};
+    cleanupLayout();
   }
 
   // 예매 결과 지도 래퍼와 패널을 원래 DOM 상태로 정리합니다.
@@ -31,16 +28,22 @@ waitForL(() => {
   function cleanup() {
     // 열차 목록이 사라지면 지도 패널도 정리
     const panel = document.getElementById("korail-map-panel");
-    if (panel && window._korailMapInstance) {
-      window._korailMapInstance.remove();
-      window._korailMapInstance = null;
+    if (window._korailMapInstance) {
+      try {
+        window._korailMapInstance.remove();
+      } catch (error) {
+        console.warn("[Korail Map] Failed to dispose route map:", error);
+      } finally {
+        window._korailMapInstance = null;
+      }
     }
 
     const wrapper = document.getElementById("korail-map-wrapper");
     if (wrapper) {
-      // tckWrap을 wrapper 밖으로 복원 후 wrapper 제거
-      const tckWrap = wrapper.querySelector(".tckWrap");
-      if (tckWrap) wrapper.parentNode.insertBefore(tckWrap, wrapper);
+      const trainTable = wrapper._korailTrainTable || wrapper.firstElementChild;
+      if (trainTable && trainTable !== panel && wrapper.contains(trainTable) && wrapper.parentNode) {
+        wrapper.parentNode.insertBefore(trainTable, wrapper);
+      }
       wrapper.remove();
     }
     if (panel?.isConnected) panel.remove();
@@ -49,7 +52,7 @@ waitForL(() => {
   // 홈 화면 가까운 역 패널과 버튼을 제거합니다.
 
   function cleanupHomeNearestPanel() {
-    resetMainToggleContainer();
+    clearHomePanelLayoutTracking();
     const panel = document.getElementById(HOME_PANEL_ID);
     if (panel) panel.remove();
     document.getElementById("korail-nearest-mini-btn")?.remove();
@@ -71,7 +74,7 @@ waitForL(() => {
 
   function isNearestPanelPage() {
     const path = location.pathname.replace(/\/+$/, "");
-    return path === "/ticket/main" || path.includes("/intro") || isGlobalMainPage();
+    return path === "/ticket/main" || path.includes("/intro");
   }
 
   // 예매 옵션 팝업이 열려 있는지 확인합니다.
@@ -160,10 +163,6 @@ waitForL(() => {
       || isVisibleKorailModalOpen();
   }
 
-  function isGlobalMainPage() {
-    return /\/global\/(eng|jpn|chn|tw|vi|th|id)\/main/i.test(location.pathname);
-  }
-
   function isKoreanLocale() {
     return getKorailLocale() === "ko";
   }
@@ -195,12 +194,14 @@ waitForL(() => {
     });
   }
 
-  function findHomeQuickMenu() {
+  let homeQuickMenuElements = null;
+
+  function collectHomeQuickMenuElements() {
     const normalize = (text) => text.replace(/\s+/g, "");
     const labels = QUICK_MENU_TEXTS.map(normalize);
     const textNodes = [...document.querySelectorAll("a, button, li, span, p, strong, em")];
 
-    const matched = labels
+    homeQuickMenuElements = labels
       .map((label) => textNodes
         .filter((el) => {
           const rect = el.getBoundingClientRect();
@@ -214,10 +215,22 @@ waitForL(() => {
           return aLength - bLength;
         })[0])
       .filter(Boolean);
+  }
+
+  function findHomeQuickMenu() {
+    if (homeQuickMenuElements === null
+      || !homeQuickMenuElements.every((element) => element.isConnected)) {
+      collectHomeQuickMenuElements();
+    }
+    const matched = homeQuickMenuElements;
 
     if (matched.length < 3) return null;
 
     const rects = matched.map((el) => el.getBoundingClientRect());
+    if (rects.some((rect) => rect.width <= 0 || rect.height <= 0)) {
+      homeQuickMenuElements = null;
+      return null;
+    }
     const paddingX = window.innerWidth * 0.012;
     const paddingY = window.innerHeight * 0.018;
     const left = Math.min(...rects.map((rect) => rect.left)) - paddingX;
@@ -406,134 +419,6 @@ waitForL(() => {
     panel.style.overflowX = "hidden";
   }
 
-  function findIntroSearchButton() {
-    const candidates = [...document.querySelectorAll("button, a, input[type='button'], input[type='submit'], [role='button'], [onclick], .search_btn, div, span")]
-      .map((el) => {
-        if (el.id === "korail-intro-toggle-btn") return false;
-        if (el.id === "korail-main-toggle-btn") return false;
-        if (el.closest(`#${HOME_PANEL_ID}`)) return false;
-        const control = el.closest("button, a, input, [role='button'], [onclick], .search_btn")
-          || (el.matches("div, span") ? el.closest("div") : el);
-        if (!control) return false;
-        let searchControl = control;
-        while (
-          searchControl.parentElement
-          && searchControl.parentElement.matches("div, span")
-          && /\bSearch\b|열차조회/.test((searchControl.parentElement.textContent || "").replace(/\s+/g, " ").trim())
-        ) {
-          const parentRect = searchControl.parentElement.getBoundingClientRect();
-          if (parentRect.width > 360 || parentRect.height > 90) break;
-          searchControl = searchControl.parentElement;
-        }
-        const rect = searchControl.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) return false;
-        if (rect.top < window.innerHeight * 0.35) return false;
-        const text = [
-          el.textContent,
-          el.value,
-          el.getAttribute("aria-label"),
-          el.getAttribute("title"),
-        ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-        const className = typeof el.className === "string" ? el.className : "";
-        const isExactSearchText = /^Search$/i.test(text);
-        const isSearchText = /\bSearch\b/i.test(text);
-        const isKorSearchText = text.includes("열차조회");
-        const isSearchClass = el.matches(".search_btn") || /\b(search|btn_search|search_btn)\b/i.test(className);
-        if (!isExactSearchText && !isSearchText && !isKorSearchText && !isSearchClass) return false;
-        if (!isExactSearchText && !isKorSearchText && (rect.width > 360 || rect.height > 90)) return false;
-
-        return {
-          el: searchControl,
-          rect,
-          score: (isExactSearchText ? 100 : 0)
-            + (isKorSearchText ? 100 : 0)
-            + (isSearchText ? 40 : 0)
-            + (isSearchClass ? 20 : 0)
-            + (el.matches("[onclick]") ? 10 : 0)
-            + (el.matches("button, input, [role='button']") ? 10 : 0),
-        };
-      })
-      .filter(Boolean);
-
-    return candidates
-      .sort((a, b) => {
-        return b.score - a.score
-          || a.rect.width * a.rect.height - b.rect.width * b.rect.height;
-      })[0]?.el || null;
-  }
-
-  function getVisibleMainRect(el, minTopRatio = 0.25) {
-    if (!el || el.closest(`#${HOME_PANEL_ID}`)) return false;
-    const style = getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
-    const rect = el.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return false;
-    if (rect.bottom <= 0 || rect.top >= window.innerHeight) return false;
-    if (rect.top < window.innerHeight * minTopRatio) return false;
-    return rect;
-  }
-
-  function isVisibleMainAnchor(el, minTopRatio = 0.25) {
-    return !!getVisibleMainRect(el, minTopRatio);
-  }
-
-  function getCommonAncestor(a, b) {
-    let node = a?.parentElement || null;
-    while (node && node !== document.body) {
-      if (node.contains(b)) return node;
-      node = node.parentElement;
-    }
-    return null;
-  }
-
-  function findMainBookingControls() {
-    const arrivals = [...document.querySelectorAll("a.btn_pop.btn_end, button.btn_pop.btn_end, .btn_pop.btn_end")]
-      .map((el) => ({ el, rect: getVisibleMainRect(el, -1) }))
-      .filter((item) => item.rect);
-    const lookups = [...document.querySelectorAll("button.btn_lookup, a.btn_lookup, .btn_lookup")]
-      .map((el) => ({ el, rect: getVisibleMainRect(el, -1) }))
-      .filter((item) => item.rect);
-
-    const pairs = [];
-    arrivals.forEach((arrival) => {
-      lookups.forEach((lookup) => {
-        const area = getCommonAncestor(arrival.el, lookup.el);
-        if (!area) return;
-        const areaRect = area.getBoundingClientRect();
-        if (areaRect.width <= 0 || areaRect.height <= 0) return;
-
-        const arrivalCenterY = arrival.rect.top + arrival.rect.height / 2;
-        const lookupCenterY = lookup.rect.top + lookup.rect.height / 2;
-        const lookupBelowArrival = lookupCenterY >= arrivalCenterY;
-        const sameSearchBand = Math.abs(lookupCenterY - arrivalCenterY) < Math.max(180, areaRect.height);
-        if (!lookupBelowArrival || !sameSearchBand) return;
-
-        pairs.push({
-          arrival: arrival.el,
-          lookup: lookup.el,
-          area,
-          score: areaRect.width * areaRect.height
-            + Math.abs(lookupCenterY - arrivalCenterY) * 40
-            + Math.abs((lookup.rect.left + lookup.rect.right) / 2 - (arrival.rect.left + arrival.rect.right) / 2),
-        });
-      });
-    });
-
-    return pairs.sort((a, b) => a.score - b.score)[0] || null;
-  }
-
-  function findMainSearchArea() {
-    return findMainBookingControls()?.area || null;
-  }
-
-  function findMainArrivalButton() {
-    return findMainBookingControls()?.arrival || null;
-  }
-
-  function findMainLookupButton() {
-    return findMainBookingControls()?.lookup || null;
-  }
-
   // 가까운 역 미니 버튼에 표시할 문구를 반환합니다.
 
   function nearestToggleText(isOpen) {
@@ -571,8 +456,6 @@ waitForL(() => {
     // 위치 계산
     const eventPop = document.querySelector("div.layer_wrap.event-pop");
     const ticketBox = document.querySelector("div.ticket_box");
-    console.log("[Korail] showMiniButton - eventPop:", !!eventPop, "ticketBox:", !!ticketBox);
-
     if (eventPop && ticketBox) {
       const popRect = eventPop.getBoundingClientRect();
       const ticketRect = ticketBox.getBoundingClientRect();
@@ -1074,13 +957,9 @@ waitForL(() => {
 
   // 가까운 역 패널의 검색 이벤트를 연결합니다.
 
-  function bindHomeNearestPanel(panel) {
-    const form = panel.querySelector("[data-nearest-form]");
-    form?.addEventListener("submit", (event) => {
-      event.preventDefault();
-      searchNearestStations(panel);
-    });
-    panel.querySelector("[data-nearest-current-location]")?.addEventListener("click", () => fillCurrentLocation(panel));
+  function bindNearestHistory(panel) {
+    if (panel.dataset.nearestHistoryBound === "true") return;
+    panel.dataset.nearestHistoryBound = "true";
     panel.querySelector("[data-nearest-history-toggle]")?.addEventListener("click", () => toggleNearestHistory(panel));
     panel.querySelector("[data-nearest-history]")?.addEventListener("click", async (event) => {
       const remove = event.target.closest("[data-history-remove]");
@@ -1107,6 +986,16 @@ waitForL(() => {
       closeNearestHistory(panel);
       input?.focus();
     });
+  }
+
+  function bindHomeNearestPanel(panel) {
+    const form = panel.querySelector("[data-nearest-form]");
+    form?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      searchNearestStations(panel);
+    });
+    panel.querySelector("[data-nearest-current-location]")?.addEventListener("click", () => fillCurrentLocation(panel));
+    bindNearestHistory(panel);
   }
 
   // 가까운 역 패널의 기본 HTML을 렌더링합니다.
@@ -1158,24 +1047,8 @@ waitForL(() => {
     }
 
     const isIntroPage = location.pathname.includes("/intro");
-    const isButtonOnlyMain = isGlobalMainPage();
     const existingPanel = document.getElementById(HOME_PANEL_ID);
-    if (existingPanel && isButtonOnlyMain && !document.getElementById("korail-main-toggle-btn")) {
-      cleanupHomeNearestPanel();
-    } else if (existingPanel) {
-      if (isButtonOnlyMain) {
-        if (existingPanel.dataset.korailLang !== getKorailLocale()) {
-          renderHomeNearestPanel(existingPanel);
-          bindHomeNearestPanel(existingPanel);
-        }
-        const isOpen = existingPanel.dataset.mainOpen === "true";
-        existingPanel.style.display = isOpen ? "" : "none";
-        const toggleBtn = document.getElementById("korail-main-toggle-btn");
-        if (toggleBtn) toggleBtn.textContent = nearestToggleText(isOpen);
-        updateNearestDisabledState();
-        return;
-      }
-
+    if (existingPanel) {
       if (existingPanel.dataset.korailLang !== getKorailLocale()) {
         renderHomeNearestPanel(existingPanel);
         bindHomeNearestPanel(existingPanel);
@@ -1194,8 +1067,6 @@ waitForL(() => {
 
     if (isIntroPage) {
       injectIntroPanel(panel);
-    } else if (isButtonOnlyMain) {
-      injectMainButtonPanel(panel);
     } else {
       document.body.appendChild(panel);
       bindHomeNearestPanel(panel);
@@ -1207,11 +1078,10 @@ waitForL(() => {
   // 인트로 화면의 가까운 역 패널을 삽입합니다.
 
   function injectIntroPanel(panel) {
-    console.log("[Korail] injectIntroPanel called");
+    clearHomePanelLayoutTracking();
     document.getElementById("korail-intro-toggle-btn")?.remove();
     const searchBtn = document.querySelector("button.search_btn");
     const searchSection = document.querySelector("section.search");
-    console.log("[Korail] intro searchBtn:", !!searchBtn, "searchSection:", !!searchSection);
     if (!searchBtn || !searchSection) return;
 
     const toggleBtn = document.createElement("button");
@@ -1261,10 +1131,14 @@ waitForL(() => {
 
     positionToggleBtn();
     updateNearestDisabledState();
-    window.addEventListener("resize", () => {
+    const handleIntroResize = () => {
       positionToggleBtn();
       positionIntroNearestPanel(panel);
-    });
+    };
+    window.addEventListener("resize", handleIntroResize);
+    homePanelLayoutCleanup = () => {
+      window.removeEventListener("resize", handleIntroResize);
+    };
 
     toggleBtn.addEventListener("click", () => {
       const isOpen = panel.style.display !== "none";
@@ -1273,180 +1147,6 @@ waitForL(() => {
         positionIntroNearestPanel(panel);
       } else {
         panel.style.display = "none";
-      }
-      toggleBtn.textContent = nearestToggleText(!isOpen);
-      updateNearestDisabledState();
-    });
-  }
-
-  function injectMainButtonPanel(panel) {
-    document.getElementById("korail-main-toggle-btn")?.remove();
-    document.getElementById("korail-main-toggle-host")?.remove();
-
-    const toggleHost = document.createElement("div");
-    toggleHost.id = "korail-main-toggle-host";
-    const toggleBtn = document.createElement("button");
-    toggleBtn.id = "korail-main-toggle-btn";
-    toggleBtn.textContent = nearestToggleText(false);
-
-    panel.style.cssText = `
-      position: fixed;
-      z-index: 9998;
-      display: none;
-      width: 340px;
-    `;
-    panel.dataset.mainOpen = "false";
-
-    document.body.appendChild(panel);
-    toggleHost.appendChild(toggleBtn);
-    document.body.appendChild(toggleHost);
-    bindHomeNearestPanel(panel);
-
-    function mountToggleHost(container) {
-      if (mainToggleContainer === container) return;
-      resetMainToggleContainer();
-      if (container !== document.body && getComputedStyle(container).position === "static") {
-        container.dataset.korailMainToggleOriginalPosition = container.style.position;
-        container.dataset.korailMainTogglePositioned = "true";
-        container.style.position = "relative";
-      }
-      container.appendChild(toggleHost);
-      mainToggleContainer = container;
-    }
-
-    function positionToggleBtn() {
-      const controls = findMainBookingControls();
-      if (!controls && mainToggleContainer?.isConnected && mainToggleContainer !== document.body) return;
-      const arrivalBtn = controls?.arrival || null;
-      const lookupBtn = controls?.lookup || null;
-      const fallbackSearchBtn = lookupBtn || findIntroSearchButton();
-      const toggleHeight = 42;
-      const container = arrivalBtn?.closest(".ticketWrap")
-        || lookupBtn?.closest(".ticketWrap")
-        || controls?.area
-        || document.body;
-      mountToggleHost(container);
-      const containerRect = container === document.body ? null : container.getBoundingClientRect();
-
-      const arrivalRect = [...document.querySelectorAll("a.btn_pop.btn_end")]
-        .filter((el) => !controls?.area || controls.area.contains(el))
-        .map((el) => getVisibleMainRect(el, -1))
-        .find(Boolean) || arrivalBtn?.getBoundingClientRect();
-      const lookupRect = lookupBtn?.getBoundingClientRect();
-      const fallbackRect = fallbackSearchBtn?.getBoundingClientRect();
-      const toggleWidth = Math.max(120, Math.round((lookupRect || fallbackRect)?.width || 210));
-      const yRect = arrivalRect
-        ? {
-          top: arrivalRect.top + window.scrollY,
-          height: arrivalRect.height,
-        }
-        : fallbackRect
-          ? {
-            top: fallbackRect.top + window.scrollY,
-            height: fallbackRect.height,
-          }
-          : {
-            top: Math.max(120, window.scrollY + window.innerHeight * 0.36),
-            height: 42,
-          };
-      const xRect = lookupRect
-        ? {
-          left: lookupRect.left + window.scrollX,
-          right: lookupRect.right + window.scrollX,
-        }
-        : fallbackRect
-          ? {
-            left: fallbackRect.left + window.scrollX,
-            right: fallbackRect.right + window.scrollX,
-          }
-          : {
-            left: Math.max(20, window.scrollX + window.innerWidth * 0.73 - 105),
-            right: Math.max(20, window.scrollX + window.innerWidth * 0.73 + 105),
-          };
-
-      const desiredLeft = (xRect.left + xRect.right) / 2;
-      const left = Math.min(
-        Math.max(window.scrollX + toggleWidth / 2 + 10, desiredLeft),
-        window.scrollX + window.innerWidth - toggleWidth / 2 - 10,
-      );
-      const top = arrivalRect
-        ? containerRect
-          ? arrivalRect.top - containerRect.top
-          : Math.max(window.scrollY + 10, arrivalRect.top + window.scrollY)
-        : containerRect
-          ? Math.max(10, yRect.top - window.scrollY - containerRect.top - toggleHeight - 28)
-          : Math.max(window.scrollY + 10, yRect.top - toggleHeight - 28);
-      const hostLeft = containerRect
-        ? left - window.scrollX - containerRect.left
-        : left;
-
-      toggleHost.style.cssText = `
-        position: absolute;
-        top: ${top}px;
-        left: ${hostLeft}px;
-        transform: translateX(-50%);
-        z-index: 9999;
-        width: ${toggleWidth}px;
-        height: ${toggleHeight}px;
-        pointer-events: none;
-      `;
-
-      toggleBtn.style.cssText = `
-        position: absolute;
-        top: 0;
-        left: 0;
-        display: block;
-        width: ${toggleWidth}px;
-        min-height: ${toggleHeight}px;
-        margin: 0;
-        padding: 10px 0;
-        background: #0052a4;
-        color: white;
-        border: none;
-        border-radius: 999px;
-        font-size: 14px;
-        font-weight: 800;
-        cursor: pointer;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-        white-space: nowrap;
-        text-align: center;
-        pointer-events: auto;
-      `;
-    }
-
-    positionToggleBtn();
-    updateNearestDisabledState();
-
-    let relayoutRaf = 0;
-    function relayoutMainToggle() {
-      window.cancelAnimationFrame(relayoutRaf);
-      relayoutRaf = window.requestAnimationFrame(() => {
-        positionToggleBtn();
-        positionIntroNearestPanel(panel);
-      });
-    }
-
-    window.addEventListener("resize", relayoutMainToggle);
-    window.addEventListener("orientationchange", relayoutMainToggle);
-    window.visualViewport?.addEventListener("resize", relayoutMainToggle);
-
-    if (typeof ResizeObserver !== "undefined") {
-      const resizeObserver = new ResizeObserver(relayoutMainToggle);
-      const searchArea = findMainSearchArea();
-      if (searchArea) resizeObserver.observe(searchArea);
-    }
-
-    toggleBtn.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const isOpen = panel.style.display !== "none";
-      if (!isOpen) {
-        panel.style.display = "";
-        panel.dataset.mainOpen = "true";
-        positionIntroNearestPanel(panel);
-      } else {
-        panel.style.display = "none";
-        panel.dataset.mainOpen = "false";
       }
       toggleBtn.textContent = nearestToggleText(!isOpen);
       updateNearestDisabledState();
@@ -1490,6 +1190,7 @@ waitForL(() => {
     const observer = new MutationObserver((records) => {
       const hasRelevantMutation = records.some((record) => !isExtensionMapMutation(record));
       if (!hasRelevantMutation) return;
+      homeQuickMenuElements = null;
       if (syncScheduled) return;
       syncScheduled = true;
       requestAnimationFrame(() => {
@@ -1518,6 +1219,7 @@ waitForL(() => {
     findNearestStationResults,
     getCurrentLocationAddress,
     renderNearestResults,
+    bindNearestHistory,
     clearNearestSearchCache,
   };
 }); // waitForL

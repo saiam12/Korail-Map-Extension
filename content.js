@@ -1,7 +1,7 @@
 // content.js는 페이지 컨텍스트에 나머지 스크립트를 순서대로 주입하는 역할만 합니다.
 
 const FILES = ["leaflet.js", "station-data.js", "station-translations.js", "map-panel.js", "injected-core.js", "support-widget.js", "home-panel.js", "station-popup.js", "booking-map.js"];
-const INJECTED_RESOURCE_VERSION = "20260723-2102";
+const INJECTED_RESOURCE_VERSION = chrome.runtime.getManifest().version;
 
 window.addEventListener("message", async (event) => {
   if (event.source !== window) return;
@@ -9,6 +9,15 @@ window.addEventListener("message", async (event) => {
   if (!request || typeof request.requestId !== "string" || request.requestId.length > 100) return;
 
   if (request.type === "KORAIL_CURRENT_LOCATION_REQUEST") {
+    if (navigator.userActivation?.isActive !== true) {
+      window.postMessage({
+        type: "KORAIL_CURRENT_LOCATION_RESPONSE",
+        requestId: request.requestId,
+        ok: false,
+        error: "Location access requires a user action.",
+      }, "*");
+      return;
+    }
     requestCurrentLocation(request.requestId);
     return;
   }
@@ -106,74 +115,95 @@ function handleNearestCache(request) {
     });
 }
 
+function isFreshNearestCacheEntry(entry, now = Date.now()) {
+  return Number.isFinite(entry?.savedAt)
+    && entry.savedAt <= now
+    && now - entry.savedAt <= nearestCacheTtlMs
+    && Array.isArray(entry.results);
+}
+
 async function processNearestCache(request) {
-    if (request.action === "clear") {
-      await chrome.storage.local.remove(nearestCacheStorageKey);
-      respondNearestCache(request, null);
-      return;
-    }
+  if (request.action === "clear") {
+    await chrome.storage.local.remove(nearestCacheStorageKey);
+    respondNearestCache(request, null);
+    return;
+  }
 
-    const stored = await chrome.storage.local.get(nearestCacheStorageKey);
-    const cache = stored[nearestCacheStorageKey] || {};
-    if (request.action === "get") {
-      const entry = cache[request.key];
-      const isFresh = entry && Number.isFinite(entry.savedAt)
-        && Date.now() - entry.savedAt <= nearestCacheTtlMs
-        && Array.isArray(entry.results);
-      respondNearestCache(request, isFresh ? entry : null);
-      return;
-    }
+  const stored = await chrome.storage.local.get(nearestCacheStorageKey);
+  const storedCache = stored[nearestCacheStorageKey];
+  const rawCache = storedCache && typeof storedCache === "object" && !Array.isArray(storedCache)
+    ? storedCache
+    : {};
+  const now = Date.now();
+  const rawEntries = Object.entries(rawCache);
+  const freshEntries = rawEntries.filter(([, entry]) => isFreshNearestCacheEntry(entry, now));
+  const cache = Object.fromEntries(freshEntries);
+  if (freshEntries.length !== rawEntries.length) {
+    await chrome.storage.local.set({ [nearestCacheStorageKey]: cache });
+  }
 
-    if (request.action === "list") {
-      const entries = Object.entries(cache)
-        .filter(([, entry]) => Number.isFinite(entry?.savedAt)
-          && Date.now() - entry.savedAt <= nearestCacheTtlMs
-          && Array.isArray(entry.results)
-          && entry.hiddenFromHistory !== true)
-        .sort(([, a], [, b]) => b.savedAt - a.savedAt)
-        .slice(0, nearestCacheMaxEntries)
-        .map(([key, entry]) => ({
-          key,
-          savedAt: entry.savedAt,
-          address: typeof entry.address === "string"
-            ? entry.address
-            : key.slice(key.indexOf(":") + 1),
-          includeAllStations: typeof entry.includeAllStations === "boolean"
-            ? entry.includeAllStations
-            : key.startsWith("all:"),
-        }));
-      respondNearestCache(request, entries);
-      return;
-    }
+  if (request.action === "get"
+    && typeof request.key === "string"
+    && request.key.length <= 300) {
+    respondNearestCache(request, cache[request.key] || null);
+    return;
+  }
 
-    if (request.action === "hide" && typeof request.key === "string") {
-      const entry = cache[request.key];
-      if (entry && Array.isArray(entry.results)) {
-        cache[request.key] = { ...entry, hiddenFromHistory: true };
-        await chrome.storage.local.set({ [nearestCacheStorageKey]: cache });
-      }
-      respondNearestCache(request, null);
-      return;
-    }
+  if (request.action === "list") {
+    const entries = Object.entries(cache)
+      .filter(([, entry]) => entry.hiddenFromHistory !== true)
+      .sort(([, a], [, b]) => b.savedAt - a.savedAt)
+      .slice(0, nearestCacheMaxEntries)
+      .map(([key, entry]) => ({
+        key,
+        savedAt: entry.savedAt,
+        address: typeof entry.address === "string"
+          ? entry.address
+          : key.slice(key.indexOf(":") + 1),
+        includeAllStations: typeof entry.includeAllStations === "boolean"
+          ? entry.includeAllStations
+          : key.startsWith("all:"),
+      }));
+    respondNearestCache(request, entries);
+    return;
+  }
 
-    if (request.action === "set"
-      && typeof request.key === "string"
-      && request.key.length <= 300
-      && Array.isArray(request.entry?.results)
-      && request.entry.results.length <= 8) {
-      const freshEntries = Object.entries(cache)
-        .filter(([key, entry]) => key !== request.key
-          && Number.isFinite(entry?.savedAt)
-          && Date.now() - entry.savedAt <= nearestCacheTtlMs)
-        .sort(([, a], [, b]) => b.savedAt - a.savedAt)
-        .slice(0, nearestCacheMaxEntries - 1);
-      const nextCache = Object.fromEntries(freshEntries);
-      nextCache[request.key] = request.entry;
-      await chrome.storage.local.set({ [nearestCacheStorageKey]: nextCache });
-      respondNearestCache(request, request.entry);
-      return;
+  if (request.action === "hide"
+    && typeof request.key === "string"
+    && request.key.length <= 300) {
+    const entry = cache[request.key];
+    if (entry) {
+      cache[request.key] = { ...entry, hiddenFromHistory: true };
+      await chrome.storage.local.set({ [nearestCacheStorageKey]: cache });
     }
-    throw new Error("Invalid nearest cache request.");
+    respondNearestCache(request, null);
+    return;
+  }
+
+  let serializedEntryLength = Infinity;
+  try {
+    serializedEntryLength = JSON.stringify(request.entry).length;
+  } catch {
+    serializedEntryLength = Infinity;
+  }
+  if (request.action === "set"
+    && typeof request.key === "string"
+    && request.key.length <= 300
+    && Array.isArray(request.entry?.results)
+    && request.entry.results.length <= 8
+    && serializedEntryLength <= 50000) {
+    const nextEntries = Object.entries(cache)
+      .filter(([key]) => key !== request.key)
+      .sort(([, a], [, b]) => b.savedAt - a.savedAt)
+      .slice(0, nearestCacheMaxEntries - 1);
+    const nextCache = Object.fromEntries(nextEntries);
+    const nextEntry = { ...request.entry, savedAt: now };
+    nextCache[request.key] = nextEntry;
+    await chrome.storage.local.set({ [nearestCacheStorageKey]: nextCache });
+    respondNearestCache(request, nextEntry);
+    return;
+  }
+  throw new Error("Invalid nearest cache request.");
 }
 
 function respondNearestCache(request, entry) {

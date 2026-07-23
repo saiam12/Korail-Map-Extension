@@ -10,7 +10,6 @@ function waitForL(cb) {
 }
 
 waitForL(() => {
-  console.log("[Korail] waitForL fired");
   const HOME_PANEL_ID = "korail-nearest-station-panel";
   const QUICK_MENU_TEXTS = [
     "승차권 예매",

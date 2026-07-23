@@ -786,8 +786,15 @@ html[data-korail-station-swap="true"] .layerWrap.type_tranin-station-pop_wrap {
 #korail-station-swap-btn {
   position: fixed;
   z-index: 9998;
-  width: 24px;
-  height: 24px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  min-width: 20px;
+  max-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  box-sizing: border-box;
+  margin: 0;
   padding: 0;
   border: 1px solid #0052a4;
   border-radius: 50%;
@@ -831,16 +838,14 @@ html[data-korail-station-swap="true"] .layerWrap.type_tranin-station-pop_wrap {
 }
 
 .korail-global-departure-field-short {
-  width: calc(var(--korail-global-field-width) - 15px) !important;
-  max-width: calc(var(--korail-global-field-width) - 15px) !important;
-  flex-basis: calc(var(--korail-global-field-width) - 15px) !important;
+  width: calc(100% - 15px) !important;
+  max-width: calc(100% - 15px) !important;
 }
 
 .korail-global-arrival-field-short {
-  width: calc(var(--korail-global-field-width) - 15px) !important;
-  max-width: calc(var(--korail-global-field-width) - 15px) !important;
-  flex-basis: calc(var(--korail-global-field-width) - 15px) !important;
-  margin-left: 30px !important;
+  width: calc(100% - 15px) !important;
+  max-width: calc(100% - 15px) !important;
+  margin-left: 15px !important;
 }
 
 #korail-support-launcher {

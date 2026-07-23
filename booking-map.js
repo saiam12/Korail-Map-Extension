@@ -194,24 +194,11 @@ waitForL(() => {
     });
   }
 
-  function findNearestVisibleGlobalField(selector, referenceRect) {
-    return [...document.querySelectorAll(selector)]
-      .filter((el) => {
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
-      })
-      .sort((a, b) => {
-        const aRect = a.getBoundingClientRect();
-        const bRect = b.getBoundingClientRect();
-        return Math.abs(aRect.left - referenceRect.left) + Math.abs(aRect.top - referenceRect.bottom)
-          - Math.abs(bRect.left - referenceRect.left) - Math.abs(bRect.top - referenceRect.bottom);
-      })[0] || null;
-  }
-
-  function adjustGlobalField(field, className) {
-    if (!field) return;
-    field.style.setProperty("--korail-global-field-width", `${field.getBoundingClientRect().width}px`);
-    field.classList.add(className);
+  function adjustGlobalStationFields(depField, arrField) {
+    const departureLine = depField.closest(".writeWrap") || depField;
+    const arrivalLine = arrField.closest(".writeWrap") || arrField;
+    departureLine.classList.add("korail-global-departure-field-short");
+    arrivalLine.classList.add("korail-global-arrival-field-short");
   }
 
   function isStationSwapBlockingPopupOpen() {
@@ -275,6 +262,15 @@ waitForL(() => {
     document.getElementById("korail-station-swap-btn")?.remove();
     document.querySelectorAll(".korail-station-swap-container")
       .forEach((el) => el.classList.remove("korail-station-swap-container"));
+  }
+
+  function calculateStationSwapPlacement(depRect, arrRect, containerRect, buttonSize) {
+    const offsetLeft = containerRect?.left || 0;
+    const offsetTop = containerRect?.top || 0;
+    return {
+      left: (depRect.right + arrRect.left) / 2 - offsetLeft - buttonSize / 2,
+      top: (depRect.top + depRect.bottom) / 2 - offsetTop - buttonSize / 2,
+    };
   }
 
   function syncStationSwapButton() {
@@ -345,16 +341,7 @@ waitForL(() => {
     }
 
     if (isGlobal) {
-      const originalDepRect = depField.getBoundingClientRect();
-      const originalArrRect = arrField.getBoundingClientRect();
-      const departureField = depField.closest(".start") || depField;
-      const arrivalField = arrField.closest(".end") || arrField;
-      const dateField = findNearestVisibleGlobalField(".day_start", originalDepRect);
-      const passengersField = findNearestVisibleGlobalField(".total", originalArrRect);
-      adjustGlobalField(departureField, "korail-global-departure-field-short");
-      adjustGlobalField(dateField, "korail-global-departure-field-short");
-      adjustGlobalField(arrivalField, "korail-global-arrival-field-short");
-      adjustGlobalField(passengersField, "korail-global-arrival-field-short");
+      adjustGlobalStationFields(depField, arrField);
     } else {
       arrField.style.marginLeft = "";
       const arrivalField = arrField.closest(".station_item") || arrField.parentElement;
@@ -364,10 +351,9 @@ waitForL(() => {
     const depRect = depField.getBoundingClientRect();
     const arrRect = arrField.getBoundingClientRect();
     const containerRect = swapContainer?.getBoundingClientRect();
-    const offsetLeft = containerRect ? containerRect.left - swapContainer.scrollLeft : 0;
-    const offsetTop = containerRect ? containerRect.top - swapContainer.scrollTop : 0;
-    button.style.left = `${(depRect.right + arrRect.left) / 2 - offsetLeft - 12}px`;
-    button.style.top = `${(depRect.top + depRect.bottom) / 2 - offsetTop - 12}px`;
+    const placement = calculateStationSwapPlacement(depRect, arrRect, containerRect, 20);
+    button.style.left = `${placement.left}px`;
+    button.style.top = `${placement.top}px`;
     button.style.display = "";
     syncStationSwapBlockedState();
   }
@@ -464,9 +450,22 @@ function isTrainTimeButton(el) {
   cleanupHomeNearestPanel();
 
   if (!dep || !arr) return;
-  if (document.getElementById("korail-map-panel")) {
-    bindTrainRowClick(dep, arr);
-    return;
+  const existingPanel = document.getElementById("korail-map-panel");
+  if (existingPanel) {
+    const segmentChanged = existingPanel.dataset.korailDep !== dep
+      || existingPanel.dataset.korailArr !== arr;
+    if (!segmentChanged) {
+      bindTrainRowClick(dep, arr);
+      return;
+    }
+
+    selectedTrainRow = null;
+    selectedTrainRowVersion += 1;
+    selectedTrainStationGroups = [];
+    selectedTransferRouteKey = "";
+    selectedTransferSegmentIndexes = new Set();
+    userTrainTimeReadVersion += 1;
+    cleanup();
   }
 
   const result = findRoute(dep, arr);
@@ -552,11 +551,14 @@ function injectMapPanel(dep, arr, stations, fullRoute) {
 
   const wrapper = document.createElement("div");
   wrapper.id = "korail-map-wrapper";
+  wrapper._korailTrainTable = trainTable;
   trainTable.parentNode.insertBefore(wrapper, trainTable);
   wrapper.appendChild(trainTable);
 
   const panel = document.createElement("div");
   panel.id = "korail-map-panel";
+  panel.dataset.korailDep = dep;
+  panel.dataset.korailArr = arr;
   wrapper.appendChild(panel);
 
   renderMap(panel, dep, arr, stations, fullRoute);
@@ -751,12 +753,6 @@ function selectTrainRowForMap(clickedRow, dep, arr, confirmedSegmentIndexes = nu
   const activeSegmentIndexes = new Set(selectedTransferSegmentIndexes);
   selectedTrainRow = clickedRow;
   selectedTrainRowVersion += 1;
-  if (transferInfo.rows.length > 1) {
-    console.warn("[Korail] selected transfer rows:", transferInfo.rows.map((item) => item.segment));
-  } else {
-    console.warn("[Korail] selected direct row:", transferInfo.rows.map((item) => item.segment));
-  }
-
   setSelectedTrainFallback(dep, arr, transferInfo.rows, activeSegmentIndexes);
   if (isTrainTimeAutomationEnabled()) {
     updateSelectedTrainStationsFromSchedule(
@@ -863,9 +859,7 @@ function getConnectedTrainRows(clickedRow) {
     segments[end].segment.arr === segments[end + 1].segment.dep
   ) end++;
 
-  const result = segments.slice(start, end + 1).map((item) => ({ ...item, segmentIndex: 0 }));
-  console.warn("[Korail] getConnectedTrainRows result:", result.map(r => r.segment));
-  return result;
+  return segments.slice(start, end + 1).map((item) => ({ ...item, segmentIndex: 0 }));
 }
 
 // 클릭한 행의 환승 묶음 키와 순서를 계산합니다.
@@ -1058,16 +1052,6 @@ function sliceTrainStations(stationNames, dep, arr, side = "auto") {
   }
 
   if (depIndex < 0 || arrIndex < 0) {
-    console.warn("[Korail][active-debug] slice fallback: station not found", {
-      dep,
-      arr,
-      side,
-      stationNames,
-      forwardDepIndex,
-      forwardArrIndex,
-      backwardDepIndex,
-      backwardArrIndex,
-    });
     return getFallbackSegmentStations(dep, arr);
   }
 
@@ -1075,15 +1059,6 @@ function sliceTrainStations(stationNames, dep, arr, side = "auto") {
   const to = Math.max(depIndex, arrIndex);
   const routeNames = stationNames.slice(from, to + 1);
   const activeStations = depIndex > arrIndex ? routeNames.reverse() : routeNames;
-  console.warn("[Korail][active-debug] slice result", {
-    dep,
-    arr,
-    side,
-    depIndex,
-    arrIndex,
-    stationNames,
-    activeStations,
-  });
   return activeStations;
 }
 
@@ -1492,17 +1467,6 @@ function drawTrainStations(dep, arr, stationGroups) {
     const activeStations = normalizedActiveStationNames
       .filter(name => STATIONS[name])
       .map(name => ({ name, ...STATIONS[name] }));
-
-    console.warn("[Korail][active-debug] draw group", {
-      dep,
-      arr,
-      rawFullStations,
-      rawActiveStations,
-      normalizedActiveStations: normalizedActiveStationNames,
-      grayStations: fullStations
-        .map((station) => station.name)
-        .filter((name) => !normalizedActiveStationNames.includes(name)),
-    });
 
     if (fullStations.length < 2) return;
 

@@ -57,7 +57,11 @@
        <div class="korail-support-choice korail-support-nearest" hidden>
         <button type="button" class="korail-support-back korail-support-nearest__back"></button>
         <form class="korail-nearest-search korail-support-nearest__form">
-          <label class="korail-nearest-search__label" for="korail-support-nearest-address" data-nearest-field="address"></label>
+          <div class="korail-nearest-search__label-row">
+            <label class="korail-nearest-search__label" for="korail-support-nearest-address" data-nearest-field="address"></label>
+            <button type="button" class="korail-nearest-history-button" data-nearest-history-toggle aria-expanded="false" aria-controls="korail-support-nearest-history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5M12 7v5l3 2"></path></svg><span data-nearest-history-label></span></button>
+          </div>
+          <div id="korail-support-nearest-history" class="korail-nearest-history" data-nearest-history hidden></div>
           <div class="korail-nearest-search__row">
             <input id="korail-support-nearest-address" data-nearest-address name="address" type="text" required autocomplete="street-address">
             <button type="submit" class="korail-nearest-card__button" data-nearest-submit></button>
@@ -78,15 +82,13 @@
   const feedback = by(".korail-support-feedback");
   const nearest = by(".korail-support-nearest");
   const nearestChoice = by("[data-support-choice='nearest']");
-  const isBookingPage = () => /\/ticket\/search\//.test(location.pathname) || !!document.querySelector(".tckWrap");
+  const isGlobalMainPage = () => /\/global\/(eng|jpn|chn|tw|vi|th|id)\/main/i.test(location.pathname);
   const setLabels = () => {
     by("#korail-support-title").textContent = text("서비스 안내", "Support");
     by(".korail-support-choice__notice").textContent = text("에러코드가 표시되면 페이지가 자동으로 새로고침됩니다.", "The page refreshes automatically when an error code appears.");
     by("[data-support-choice='nearest'] strong").textContent = text("가까운 주요역 찾기", "Find nearby major stations");
     by("[data-support-choice='nearest'] span").textContent = text("주소를 기준으로 가까운 주요역을 찾습니다.", "Find nearby major stations by address.");
-    // 서비스 안내의 가까운 주요역 찾기는 임시 비활성화합니다.
-    // nearestChoice.hidden = !isBookingPage();
-    nearestChoice.hidden = true;
+    nearestChoice.hidden = !isGlobalMainPage();
     by("[data-support-choice='inquiry'] strong").textContent = text("문의", "Contact");
     by("[data-support-choice='inquiry'] span").textContent = text("확장 프로그램과 코레일 관련 문의", "Extension and KORAIL inquiries");
     by("[data-support-choice='extension'] strong").textContent = text("확장 프로그램 문의", "Extension feedback");
@@ -102,6 +104,7 @@
     by("[data-nearest-field='includeAll']").textContent = text("일반역 포함", "Include all stations");
     by(".korail-support-nearest__form input[name='address']").placeholder = text("예: 서울시청, 대구 수성구", "e.g. Seoul City Hall");
     by("[data-nearest-location-label]").textContent = text("내 위치", "My location");
+    by("[data-nearest-history-label]").textContent = text("최근 기록", "History");
     by("[data-nearest-submit]").textContent = text("검색", "Search");
     window.KORAIL_HOME?.renderNearestResults?.(nearest, "idle", text("주소를 입력한 후 검색하세요.", "Enter an address and search."));
     by("[data-support-field='category']").textContent = text("문의 유형", "Category");
@@ -118,7 +121,14 @@
 
   const showChoices = () => { choice.hidden = false; inquiry.hidden = true; feedback.hidden = true; nearest.hidden = true; };
   const showInquiry = () => { choice.hidden = true; inquiry.hidden = false; feedback.hidden = true; nearest.hidden = true; };
-  const showNearest = () => { if (!isBookingPage()) return; choice.hidden = true; inquiry.hidden = true; feedback.hidden = true; nearest.hidden = false; };
+  const showNearest = () => {
+    if (!isGlobalMainPage()) return;
+    window.KORAIL_HOME?.bindNearestHistory?.(nearest);
+    choice.hidden = true;
+    inquiry.hidden = true;
+    feedback.hidden = true;
+    nearest.hidden = false;
+  };
   const close = () => { modal.hidden = true; showChoices(); };
   const open = () => { setLabels(); by(".korail-support-form__status").textContent = ""; by(".korail-support-form__status").dataset.state = ""; showChoices(); modal.hidden = false; };
   launcher.addEventListener("click", () => {
@@ -216,27 +226,88 @@
   });
 
   const errorCodePattern = /\bCODE\s*:\s*-\d+/i;
+  const errorDialogSelector = ".ReactModal__Content, [role='dialog'], .layerWrap, .modal, .popup";
+  const errorReloadStorageKey = "korail-error-reload-attempted";
   let errorReloadScheduled = false;
 
+  function isVisibleErrorDialog(dialog) {
+    if (dialog.hidden || dialog.getAttribute("aria-hidden") === "true") return false;
+    const rect = dialog.getBoundingClientRect();
+    const style = getComputedStyle(dialog);
+    return rect.width > 0
+      && rect.height > 0
+      && rect.right > 0
+      && rect.bottom > 0
+      && rect.left < window.innerWidth
+      && rect.top < window.innerHeight
+      && style.display !== "none"
+      && style.visibility !== "hidden"
+      && Number.parseFloat(style.opacity || "1") > 0;
+  }
+
+  function mutationTouchesErrorDialog(records) {
+    const elementFor = (node) => node?.nodeType === 1 ? node : node?.parentElement;
+    const isInsideDialog = (node) => {
+      const element = elementFor(node);
+      return !!element
+        && (element.matches?.(errorDialogSelector) || element.closest?.(errorDialogSelector));
+    };
+    const containsDialog = (node) => {
+      const element = elementFor(node);
+      return isInsideDialog(element)
+        || (element !== document.body && !!element?.querySelector?.(errorDialogSelector));
+    };
+    return records.some((record) => isInsideDialog(record.target)
+      || (record.type === "attributes" && containsDialog(record.target))
+      || [...record.addedNodes].some(containsDialog));
+  }
+
+  function hasAttemptedErrorReload() {
+    try {
+      return sessionStorage.getItem(errorReloadStorageKey) === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  function setAttemptedErrorReload(attempted) {
+    try {
+      if (attempted) sessionStorage.setItem(errorReloadStorageKey, "true");
+      else sessionStorage.removeItem(errorReloadStorageKey);
+    } catch {
+      // sessionStorage can be unavailable in restricted browser modes.
+    }
+  }
+
   const reloadOnErrorCode = () => {
-    if (errorReloadScheduled) return;
-    const dialogs = document.querySelectorAll(".ReactModal__Content, [role='dialog'], .layerWrap, .modal, .popup");
-    const hasErrorCode = [...dialogs].some((dialog) => errorCodePattern.test(dialog.textContent || ""));
-    if (!hasErrorCode) return;
+    const dialogs = [...document.querySelectorAll(errorDialogSelector)].filter(isVisibleErrorDialog);
+    const hasErrorCode = dialogs.some((dialog) => errorCodePattern.test(dialog.textContent || ""));
+    if (!hasErrorCode) {
+      if (!errorReloadScheduled) setAttemptedErrorReload(false);
+      return;
+    }
+    if (errorReloadScheduled || hasAttemptedErrorReload()) return;
 
     errorReloadScheduled = true;
-    const randomNumber = Math.floor(Math.random() * 51) + 50;
-    setTimeout(() => location.reload(), randomNumber);//100-200ms 지연 후 새로고침
+    setAttemptedErrorReload(true);
+    const randomNumber = Math.floor(Math.random() * 101) + 100;
+    setTimeout(() => location.reload(), randomNumber);
   };
 
   let errorDialogScanFrame = null;
-  const errorDialogObserver = new MutationObserver(() => {
+  const errorDialogObserver = new MutationObserver((records) => {
+    if (!mutationTouchesErrorDialog(records)) return;
     if (errorDialogScanFrame !== null) return;
     errorDialogScanFrame = requestAnimationFrame(() => {
       errorDialogScanFrame = null;
       reloadOnErrorCode();
     });
   });
-  errorDialogObserver.observe(document.body, { childList: true, subtree: true });
+  errorDialogObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class", "style", "hidden", "aria-hidden"],
+  });
   reloadOnErrorCode();
 })();
