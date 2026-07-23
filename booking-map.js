@@ -370,6 +370,10 @@ function getGlobalTrainRows(root = document) {
 }
 
 function getGlobalTrainTable() {
+  const resultTable = [...document.querySelectorAll(".tabPage.active .tckWrap, .tckWrap")]
+    .find((table) => getGlobalTrainRows(table).length > 0);
+  if (resultTable) return resultTable;
+
   const rows = getGlobalTrainRows();
   if (!rows.length) return null;
 

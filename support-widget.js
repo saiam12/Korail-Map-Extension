@@ -82,13 +82,15 @@
   const feedback = by(".korail-support-feedback");
   const nearest = by(".korail-support-nearest");
   const nearestChoice = by("[data-support-choice='nearest']");
-  const isGlobalMainPage = () => /\/global\/(eng|jpn|chn|tw|vi|th|id)\/main/i.test(location.pathname);
+  function isGlobalNearestPage(pathname = location.pathname) {
+    return /\/global\/(eng|jpn|chn|tw|vi|th|id)\/(?:main|ticket(?:\/.*)?)\/?$/i.test(pathname);
+  }
   const setLabels = () => {
     by("#korail-support-title").textContent = text("서비스 안내", "Support");
     by(".korail-support-choice__notice").textContent = text("에러코드가 표시되면 페이지가 자동으로 새로고침됩니다.", "The page refreshes automatically when an error code appears.");
     by("[data-support-choice='nearest'] strong").textContent = text("가까운 주요역 찾기", "Find nearby major stations");
     by("[data-support-choice='nearest'] span").textContent = text("주소를 기준으로 가까운 주요역을 찾습니다.", "Find nearby major stations by address.");
-    nearestChoice.hidden = !isGlobalMainPage();
+    nearestChoice.hidden = !isGlobalNearestPage();
     by("[data-support-choice='inquiry'] strong").textContent = text("문의", "Contact");
     by("[data-support-choice='inquiry'] span").textContent = text("확장 프로그램과 코레일 관련 문의", "Extension and KORAIL inquiries");
     by("[data-support-choice='extension'] strong").textContent = text("확장 프로그램 문의", "Extension feedback");
@@ -122,7 +124,7 @@
   const showChoices = () => { choice.hidden = false; inquiry.hidden = true; feedback.hidden = true; nearest.hidden = true; };
   const showInquiry = () => { choice.hidden = true; inquiry.hidden = false; feedback.hidden = true; nearest.hidden = true; };
   const showNearest = () => {
-    if (!isGlobalMainPage()) return;
+    if (!isGlobalNearestPage()) return;
     window.KORAIL_HOME?.bindNearestHistory?.(nearest);
     choice.hidden = true;
     inquiry.hidden = true;
