@@ -11,22 +11,18 @@ waitForL(() => {
   } = window.KORAIL_SHARED;
   const { cleanup, cleanupHomeNearestPanel, isLoginPage, updateNearestDisabledState, positionHomeNearestPanel, injectHomeNearestPanel } = window.KORAIL_HOME;
 
-  var isFetchingTrainStations = false;
-  var activeTrainStationsRequestVersion = -1;
-  var completedTrainStationsRequestVersion = -1;
-  var pendingTrainStationsRequest = null;
-  var bottomTrainTimeTimer = null;
   var selectedTrainRow = null;
-  var selectedTrainSegment = null;
   var selectedTrainRowVersion = 0;
+  var selectedTrainStationGroups = [];
   var selectedTransferRouteKey = "";
-  var selectedTransferRouteGroups = new Map();
-  const trainTimeAutomationStorageKey = "korail-map-train-time-automation";
-  const isStoredToggleEnabled = (key) => {
-    try { return localStorage.getItem(key) !== "false"; }
-    catch { return true; }
-  };
-  const isTrainTimeAutomationEnabled = () => isStoredToggleEnabled(trainTimeAutomationStorageKey);
+  var selectedTransferSegmentIndexes = new Set();
+  var currentBookingDep = "";
+  var currentBookingArr = "";
+  var userTrainTimeReadVersion = 0;
+  var userTrainTimeClickBound = false;
+  var trainRowClickBound = false;
+  const trainScheduleCache = new Map();
+  const isTrainTimeAutomationEnabled = () => true;
 
   function getStationFields(type) {
     const selectors = type === "dep"
@@ -396,8 +392,20 @@ function getGlobalTrainTable() {
   return table;
 }
 
+function isDomesticTrainSearchResultsPage() {
+  const path = location.pathname.replace(/\/+$/, "").toLowerCase();
+  return path === "/ticket/search/list"
+    || path === "/ticket/search/list/discount";
+}
+
 function getTrainTable() {
-  return document.querySelector(".tckWrap") || getGlobalTrainTable();
+  const domesticTable = isDomesticTrainSearchResultsPage()
+    ? document.querySelector(".tckWrap")
+    : null;
+  if (domesticTable?.querySelector(".tckList .price_box")) {
+    return domesticTable;
+  }
+  return getGlobalTrainTable();
 }
 
 function isGlobalTicketPage() {
@@ -456,7 +464,10 @@ function isTrainTimeButton(el) {
   cleanupHomeNearestPanel();
 
   if (!dep || !arr) return;
-  if (document.getElementById("korail-map-panel")) return;
+  if (document.getElementById("korail-map-panel")) {
+    bindTrainRowClick(dep, arr);
+    return;
+  }
 
   const result = findRoute(dep, arr);
 
@@ -477,9 +488,24 @@ function isTrainTimeButton(el) {
   }
 }
 
+function isExtensionMapMutation(record) {
+  const target = record?.target?.nodeType === 1
+    ? record.target
+    : record?.target?.parentElement;
+  return !!target?.closest?.("#korail-map-panel, #korail-station-map-popup, .leaflet-container");
+}
+
 let tryInitTimer = null;
-const spaObserver = new MutationObserver(() => {
-  syncStationSwapBlockedState();
+let spaObserverFrame = null;
+const spaObserver = new MutationObserver((records) => {
+  const hasRelevantMutation = records.some((record) => !isExtensionMapMutation(record));
+  if (!hasRelevantMutation) return;
+  if (spaObserverFrame === null) {
+    spaObserverFrame = requestAnimationFrame(() => {
+      spaObserverFrame = null;
+      syncStationSwapBlockedState();
+    });
+  }
   clearTimeout(tryInitTimer);
   tryInitTimer = setTimeout(() => {
     tryInit();
@@ -537,7 +563,7 @@ function injectMapPanel(dep, arr, stations, fullRoute) {
   bindTrainRowClick(dep, arr);
 }
 
-// 열차 행 클릭과 하단 열차시각 자동 조회를 연결합니다.
+// 열차 선택을 읽기 전용 정차역 조회와 연결합니다.
 
 // 하단바 바로 위에 위치한 .tckList 행을 찾습니다.
 
@@ -565,12 +591,49 @@ function findBottomBarContainer() {
   return timeBtn.closest("[class]") || null;
 }
 
+function getClickedTrainSeatIndex(row, target) {
+  const link = target?.closest?.("a");
+  const priceBox = target?.closest?.(".price_box");
+  if (!link || !priceBox || !row?.contains(priceBox) || !priceBox.contains(link)) return -1;
+  return [...row.querySelectorAll(".price_box")].indexOf(priceBox);
+}
+
+function getTrainSeatSelectionSignature(rows) {
+  return rows.map((item) => [...item.row.querySelectorAll(".price_box")]
+    .map((box) => box.classList.contains("active") ? "1" : "0")
+    .join(""))
+    .join("|");
+}
+
+function getConfirmedTransferSegmentIndexes(rows) {
+  const indexes = new Set();
+  rows.forEach((item, index) => {
+    if (item.row?.querySelector(".price_box.active")) indexes.add(index);
+  });
+  return indexes;
+}
+
+function findConfirmedSelectedTrainRow(trainTable) {
+  if (!trainTable) return null;
+  if (isGlobalTicketPage()) return getRowAboveBottomBar(findBottomBarContainer());
+  const activeBoxes = [...trainTable.querySelectorAll(".tckList .price_box.active")];
+  return activeBoxes.at(-1)?.closest(".tckList") || null;
+}
+
 function bindTrainRowClick(dep, arr) {
-  let lastBottomBarKey = "";
-  const trainTable = getTrainTable();
-  if (trainTable && !trainTable.dataset.korailBound) {
-    trainTable.dataset.korailBound = "1";
-    trainTable.addEventListener("click", (event) => {
+  if (currentBookingDep && currentBookingArr
+    && (dep !== currentBookingDep || arr !== currentBookingArr)) {
+    selectedTransferRouteKey = "";
+    selectedTransferSegmentIndexes = new Set();
+  }
+  currentBookingDep = dep;
+  currentBookingArr = arr;
+
+  if (!trainRowClickBound) {
+    trainRowClickBound = true;
+    document.addEventListener("click", (event) => {
+      const trainTable = getTrainTable();
+      if (!trainTable) return;
       const clickedRow = event.target.closest(".tckList")
         || (() => {
           let el = event.target;
@@ -581,59 +644,130 @@ function bindTrainRowClick(dep, arr) {
           return null;
         })();
       if (!clickedRow || !trainTable.contains(clickedRow)) return;
-      const transferInfo = getTransferRouteInfo(clickedRow);
-      selectedTrainRow = clickedRow;
-      selectedTrainSegment = getTrainRowSegment(clickedRow);
-      selectedTrainRowVersion += 1;
-      if (transferInfo.rows.length > 1) {
-        selectedTransferRouteKey = transferInfo.key;
-        selectedTransferRouteGroups.set(transferInfo.key, transferInfo.rows);
-        console.warn("[Korail] selected transfer rows:", transferInfo.rows.map((item) => item.segment));
-      } else {
-        selectedTransferRouteKey = "";
-        selectedTransferRouteGroups.clear();
-        console.warn("[Korail] selected direct row:", transferInfo.rows.map((item) => item.segment));
-      }
+      const isGlobal = isGlobalTicketPage();
+      const seatIndex = isGlobal ? -1 : getClickedTrainSeatIndex(clickedRow, event.target);
+      if (!isGlobal && seatIndex < 0) return;
+      const clickedRowKey = getTrainRowKey(clickedRow);
+      const previousSelectionSignature = isGlobal
+        ? ""
+        : getTrainSeatSelectionSignature(getConnectedTrainRows(clickedRow));
 
-      const clickedRowVersion = selectedTrainRowVersion;
-      clearTimeout(bottomTrainTimeTimer);
-      bottomTrainTimeTimer = setTimeout(() => {
-        if (clickedRowVersion === selectedTrainRowVersion) {
-          fetchBottomBarTrainStations(dep, arr);
+      // 코레일의 행 선택 이벤트가 모두 끝난 다음 지도만 갱신합니다.
+      setTimeout(() => {
+        const liveTable = getTrainTable();
+        const liveRows = isGlobal
+          ? getGlobalTrainRows(liveTable)
+          : [...(liveTable?.querySelectorAll(".tckList") || [])];
+        const currentRow = clickedRow.isConnected && liveTable?.contains(clickedRow)
+          ? clickedRow
+          : liveRows.find((row) => getTrainRowKey(row) === clickedRowKey);
+        if (!currentRow || !liveTable?.contains(currentRow)) return;
+        if (isGlobal) {
+          selectTrainRowForMap(currentRow, currentBookingDep, currentBookingArr);
+          return;
         }
-      }, isGlobalTicketPage() ? 150 : 350);
+
+        const confirmedRows = getConnectedTrainRows(currentRow);
+        const confirmedSelectionSignature = getTrainSeatSelectionSignature(confirmedRows);
+        if (confirmedSelectionSignature === previousSelectionSignature) return;
+        if (selectConfirmedTrainRowForMap(currentRow, currentBookingDep, currentBookingArr)) return;
+
+        const remainingSelectedRow = findConfirmedSelectedTrainRow(liveTable);
+        if (remainingSelectedRow
+          && selectConfirmedTrainRowForMap(remainingSelectedRow, currentBookingDep, currentBookingArr)) return;
+        resetSelectedTrainMap(currentBookingDep, currentBookingArr);
+      }, 0);
+    }, true);
+  }
+
+  if (!userTrainTimeClickBound) {
+    userTrainTimeClickBound = true;
+    document.addEventListener("click", (event) => {
+      const control = event.target.closest("a, button");
+      if (!control || !isTrainTimeButton(control) || !isTrainTimeAutomationEnabled()) return;
+
+      const bottomButtons = getBottomBarInfo().timeBtns;
+      const trainTable = getTrainTable();
+      if (!bottomButtons.includes(control) && !trainTable?.contains(control)) return;
+
+      const buttonIndex = Math.max(bottomButtons.indexOf(control), 0);
+      const readVersion = ++userTrainTimeReadVersion;
+      setTimeout(() => {
+        updateTrainStationsFromUserTimeModal(buttonIndex, selectedTrainRowVersion, readVersion);
+      }, 0);
     });
   }
 
-  // 하단바 열차시각 버튼이 나타나는 순간을 감지해 정차역을 가져옵니다.
-  const observer = new MutationObserver(() => {
-    if (isFetchingTrainStations || document.querySelector(".ReactModal__Content")) return;
-
-    const timeBtn = findSelectedBottomTrainTimeButton();
-    if (!timeBtn) return;
-
-    const btnKey = [
-      timeBtn.textContent || "",
-      timeBtn.getBoundingClientRect().top,
-      selectedTrainRowVersion,
-      getSelectedTrainRowKey(),
-    ].join("|");
-    if (btnKey === lastBottomBarKey) return;
-    lastBottomBarKey = btnKey;
-
-    clearTimeout(bottomTrainTimeTimer);
-    bottomTrainTimeTimer = setTimeout(() => {
-      console.warn("[Korail] 하단바 감지 - type:", getBottomBarInfo().type);
-      fetchBottomBarTrainStations(dep, arr);
-    }, isGlobalTicketPage() ? 80 : 200);
-  });
-
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-  });
+  setTimeout(() => {
+    if (selectedTrainRow?.isConnected || !isTrainTimeAutomationEnabled()) return;
+    const liveTable = getTrainTable();
+    const selectedRow = findConfirmedSelectedTrainRow(liveTable);
+    if (selectedRow && liveTable?.contains(selectedRow)) {
+      if (isGlobalTicketPage()) {
+        selectTrainRowForMap(selectedRow, currentBookingDep, currentBookingArr);
+      } else {
+        selectConfirmedTrainRowForMap(selectedRow, currentBookingDep, currentBookingArr);
+      }
+    }
+  }, 0);
 }
-window.fetchTrainStations = fetchTrainStations;
+
+function selectConfirmedTrainRowForMap(clickedRow, dep, arr) {
+  const rows = getConnectedTrainRows(clickedRow);
+  const confirmedSegmentIndexes = getConfirmedTransferSegmentIndexes(rows);
+  if (!confirmedSegmentIndexes.size) return false;
+  selectTrainRowForMap(clickedRow, dep, arr, confirmedSegmentIndexes);
+  return true;
+}
+
+function resetSelectedTrainMap(dep, arr) {
+  selectedTrainRow = null;
+  selectedTrainRowVersion += 1;
+  selectedTransferRouteKey = "";
+  selectedTransferSegmentIndexes = new Set();
+  selectedTrainStationGroups = [{
+    fullStations: getFallbackRouteStations(dep, arr),
+    activeStations: getFallbackSegmentStations(dep, arr),
+    transferStations: [],
+  }];
+  if (isTrainTimeAutomationEnabled()) {
+    drawTrainStations(dep, arr, selectedTrainStationGroups);
+  }
+}
+
+function selectTrainRowForMap(clickedRow, dep, arr, confirmedSegmentIndexes = null) {
+  const transferInfo = getTransferRouteInfo(clickedRow);
+  selectedTransferSegmentIndexes = confirmedSegmentIndexes instanceof Set
+    ? new Set([...confirmedSegmentIndexes]
+      .filter((index) => index >= 0 && index < transferInfo.rows.length))
+    : getNextTransferSelection(
+      selectedTransferRouteKey,
+      selectedTransferSegmentIndexes,
+      transferInfo.key,
+      transferInfo.index,
+      transferInfo.rows.length,
+    );
+  selectedTransferRouteKey = transferInfo.key;
+  const activeSegmentIndexes = new Set(selectedTransferSegmentIndexes);
+  selectedTrainRow = clickedRow;
+  selectedTrainRowVersion += 1;
+  if (transferInfo.rows.length > 1) {
+    console.warn("[Korail] selected transfer rows:", transferInfo.rows.map((item) => item.segment));
+  } else {
+    console.warn("[Korail] selected direct row:", transferInfo.rows.map((item) => item.segment));
+  }
+
+  setSelectedTrainFallback(dep, arr, transferInfo.rows, activeSegmentIndexes);
+  if (isTrainTimeAutomationEnabled()) {
+    updateSelectedTrainStationsFromSchedule(
+      dep,
+      arr,
+      transferInfo.rows,
+      selectedTrainRowVersion,
+      activeSegmentIndexes,
+    );
+  }
+}
 
 // 문장 안에서 역명을 찾아 반환합니다.
 
@@ -689,16 +823,16 @@ function getTrainRowSegments(row) {
   return unique.length ? unique : [getTrainRowSegment(row)].filter(Boolean);
 }
 
-function getSelectedTrainRowKey() {
-  if (!selectedTrainRow?.isConnected) return "";
+function getTrainRowKey(row) {
+  if (!row) return "";
   const rows = [...document.querySelectorAll(".tckWrap .tckList")];
-  const index = rows.indexOf(selectedTrainRow);
-  const segment = getTrainRowSegment(selectedTrainRow);
+  const index = rows.indexOf(row);
+  const segment = getTrainRowSegment(row);
   return [
     index,
     segment?.dep || "",
     segment?.arr || "",
-    (selectedTrainRow.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80),
+    (row.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80),
   ].join(":");
 }
 
@@ -739,10 +873,36 @@ function getConnectedTrainRows(clickedRow) {
 function getTransferRouteInfo(clickedRow) {
   const rows = getConnectedTrainRows(clickedRow);
   const index = rows.findIndex((item) => item.row === clickedRow);
+  const allRows = [...document.querySelectorAll(".tckWrap .tckList")];
   const key = rows
-    .map((item) => `${item.segment?.dep || ""}-${item.segment?.arr || ""}`)
+    .map((item) => {
+      const rowIndex = allRows.indexOf(item.row);
+      const trainNumbers = getDisplayedTrainNumbers(item.row);
+      const trainNo = trainNumbers[item.segmentIndex || 0] || trainNumbers[0] || "";
+      const times = [...String(item.row?.textContent || "").matchAll(/\b\d{1,2}:\d{2}\b/g)]
+        .map((match) => match[0])
+        .join("-");
+      return [
+        rowIndex,
+        item.segmentIndex || 0,
+        item.segment?.dep || "",
+        item.segment?.arr || "",
+        trainNo,
+        times,
+      ].join(":");
+    })
     .join("|");
   return { rows, index: Math.max(index, 0), key };
+}
+
+function getNextTransferSelection(previousKey, previousIndexes, routeKey, clickedIndex, segmentCount) {
+  const next = previousKey === routeKey ? new Set(previousIndexes) : new Set();
+  [...next].forEach((index) => {
+    if (index < 0 || index >= segmentCount) next.delete(index);
+  });
+  const safeIndex = Math.max(0, Math.min(clickedIndex, Math.max(segmentCount - 1, 0)));
+  next.add(safeIndex);
+  return next;
 }
 
 // 환승 구간에서 파란색으로 표시할 활성 정차역을 계산합니다.
@@ -757,87 +917,6 @@ function getTransferActiveStations(stationNames, segment, transferInfo) {
   const to = isLast ? stationNames.at(-1) : segment.arr;
   const side = isFirst ? "leading" : isLast ? "trailing" : "auto";
   return sliceTrainStations(stationNames, from, to, side);
-}
-
-// 지정한 시간만큼 대기하는 Promise를 반환합니다.
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// 텍스트나 aria-label로 버튼 또는 링크를 찾습니다.
-
-function findButtonByText(root, ...keywords) {
-  // 텍스트 또는 aria-label로 버튼/링크 탐색
-  const els = [...(root || document).querySelectorAll("a, button")];
-  for (const kw of keywords) {
-    const found = els.find((el) => {
-      const text = (el.textContent || el.getAttribute("aria-label") || "").trim();
-      return text.includes(kw);
-    });
-    if (found) return found;
-  }
-  return null;
-}
-
-// 열차 행에서 열차시각 버튼을 찾습니다.
-
-async function getTrainTimeButton(row, index = 0) {
-  if (!row) return null;
-  const timeButtons = [...row.querySelectorAll("a, button")]
-    .filter((el) => {
-      return isTrainTimeButton(el);
-    });
-  if (timeButtons[index]) return timeButtons[index];
-  if (timeButtons[0]) return timeButtons[0];
-  const fallbackButtons = [...row.querySelectorAll(".reserv_center a")];
-  if (fallbackButtons[index]) return fallbackButtons[index];
-  if (fallbackButtons[0]) return fallbackButtons[0];
-  // 텍스트 우선 탐색
-  const byText = [...row.querySelectorAll("a, button")].find(isTrainTimeButton);
-  if (byText) return byText;
-  // fallback: .reserv_center 첫 번째 a
-  return null;
-}
-
-// async function getTrainFareButton(row) {
-//   if (!row) return null;
-//   const byText = findButtonByText(row, "운임요금", "요금", "Fare");
-//   if (byText) return byText;
-//   // fallback: .reserv_center 두 번째 a
-//   const btns = row.querySelectorAll(".reserv_center a");
-//   return btns[1] || btns[0] || null;
-// }
-
-// 열려 있는 모달이 사라질 때까지 기다립니다.
-
-function waitModalGone(timeout = 2000) {
-  return new Promise((resolve) => {
-    if (!document.querySelector(".ReactModal__Content")) { resolve(); return; }
-    logInfoGuideModalIfPresent();
-    const obs = new MutationObserver(() => {
-      logInfoGuideModalIfPresent();
-      if (!document.querySelector(".ReactModal__Content")) { obs.disconnect(); resolve(); }
-    });
-    obs.observe(document.body, { childList: true, subtree: true });
-    setTimeout(() => { obs.disconnect(); resolve(); }, timeout);
-  });
-}
-
-function isInfoGuideModal(modal) {
-  if (!modal) return false;
-  const text = modal.textContent || "";
-  const hasTrainTable = !!modal.querySelector(".sh-table");
-  return text.includes("이용안내") && text.includes("확인") && !hasTrainTable;
-}
-
-function logInfoGuideModalIfPresent() {
-  const modal = document.querySelector(".ReactModal__Content");
-  if (!isInfoGuideModal(modal)) return false;
-  if (modal.dataset.korailInfoLogged === "1") return true;
-  modal.dataset.korailInfoLogged = "1";
-  console.warn("[Korail] 이용안내 팝업 감지됨 - 사용자 확인 전까지 대기합니다.");
-  return true;
 }
 
 // 열차시각 모달에서 정차역 목록을 추출합니다.
@@ -887,16 +966,14 @@ function extractSegmentFromTimeModal(modal) {
   return null;
 }
 
-// 열차시각 버튼을 열어 정차역 목록을 읽고 닫습니다.
+// 사용자가 직접 연 열차시각 모달에서 정차역 목록을 읽습니다.
 
-function waitTrainTimeStations(timeBtn) {
+function waitUserOpenedTrainTimeStations(readVersion) {
   return new Promise((resolve) => {
-    if (!timeBtn) { resolve([]); return; }
-
     const readModal = () => {
-      const modal = document.querySelector(".ReactModal__Content");
+      const modal = [...document.querySelectorAll(".ReactModal__Content")]
+        .find((element) => element.querySelector(".sh-table"));
       if (!modal) return { type: "none" };
-      if (logInfoGuideModalIfPresent()) return { type: "guide" };
       const stationNames = extractStopStationsFromTimeModal(modal);
       const unique = [];
       stationNames.forEach((name) => { if (unique.at(-1) !== name) unique.push(name); });
@@ -907,55 +984,30 @@ function waitTrainTimeStations(timeBtn) {
     };
 
     let settled = false;
-    let waitingForInfoGuide = false;
-    let retriedAfterInfoGuide = false;
     const finish = (result) => {
       if (settled) return;
       settled = true;
       obs.disconnect();
       clearTimeout(timer);
-      if (isTrainTimeAutomationEnabled() && Array.isArray(result) && result.length >= 2) {
-        document.querySelector(".ReactModal__Content .btn_close")?.click();
-      }
       resolve(result || []);
     };
 
-    const timer = setTimeout(() => finish([]), isGlobalTicketPage() ? 6000 : 10000);
+    const timer = setTimeout(() => finish([]), 6000);
 
     const obs = new MutationObserver(() => {
       if (settled) return;
-      if (waitingForInfoGuide && !document.querySelector(".ReactModal__Content")) {
-        waitingForInfoGuide = false;
-        if (!retriedAfterInfoGuide) {
-          retriedAfterInfoGuide = true;
-          // setTimeout(() => {
-          if (!settled && isTrainTimeAutomationEnabled()) timeBtn.click();
-          // }, 0);
-          return;
-        }
+      if (readVersion !== userTrainTimeReadVersion || !isTrainTimeAutomationEnabled()) {
+        finish([]);
+        return;
       }
 
       const result = readModal();
-      if (result.type === "guide") {
-        waitingForInfoGuide = true;
-        return;
-      }
       if (result.type === "stations") finish(result.stationNames);
     });
-    obs.observe(document.body, { childList: true, subtree: true });
+    obs.observe(document.body, { childList: true, characterData: true, subtree: true });
 
-    // 이미 열려있으면 즉시 읽기
     const immediate = readModal();
-    if (immediate.type === "guide") {
-      waitingForInfoGuide = true;
-      return;
-    }
     if (immediate.type === "stations") { finish(immediate.stationNames); return; }
-    if (immediate.type === "none") {
-      // setTimeout(() => {
-      if (!settled && isTrainTimeAutomationEnabled()) timeBtn.click();
-      // }, randomNumber);
-    }
   });
 }
 
@@ -1057,6 +1109,356 @@ function getFallbackRouteStations(dep, arr) {
   return depIdx > arrIdx ? routeNames.reverse() : routeNames;
 }
 
+function getCombinedTransferFullStations(
+  stationNames,
+  segment,
+  index,
+  segmentCount,
+  isCombinedTransfer,
+) {
+  if (!isCombinedTransfer || segmentCount < 2 || !segment || stationNames.length < 2) {
+    return stationNames;
+  }
+  if (index === 0) {
+    return sliceTrainStations(stationNames, stationNames[0], segment.arr, "leading");
+  }
+  if (index === segmentCount - 1) {
+    return sliceTrainStations(stationNames, segment.dep, stationNames.at(-1), "trailing");
+  }
+  return sliceTrainStations(stationNames, segment.dep, segment.arr);
+}
+
+function getSelectedTrainSegments(dep, arr) {
+  const segments = (selectedTrainRow ? getConnectedTrainRows(selectedTrainRow) : [])
+    .map((item) => item.segment)
+    .filter((segment) => segment?.dep && segment?.arr);
+  return segments.length ? segments : [{ dep, arr }];
+}
+
+function buildFallbackTrainStationGroups(
+  dep,
+  arr,
+  rows = null,
+  activeSegmentIndexes = selectedTransferSegmentIndexes,
+) {
+  const segments = rows?.length
+    ? rows.map((item) => item.segment || { dep, arr })
+    : getSelectedTrainSegments(dep, arr);
+  const transferStations = getTransferStationNames(segments);
+  const isCombinedTransfer = segments.length > 1
+    && segments.every((_, index) => activeSegmentIndexes.has(index));
+  return segments.map((segment, index) => {
+    if (!activeSegmentIndexes.has(index)) {
+      return { fullStations: [], activeStations: [], transferStations };
+    }
+    const fullStations = getFallbackRouteStations(segment.dep, segment.arr);
+    return {
+      fullStations: getCombinedTransferFullStations(
+        fullStations,
+        segment,
+        index,
+        segments.length,
+        isCombinedTransfer,
+      ),
+      activeStations: getFallbackSegmentStations(segment.dep, segment.arr),
+      transferStations,
+    };
+  });
+}
+
+function setSelectedTrainFallback(dep, arr, rows, activeSegmentIndexes) {
+  selectedTrainStationGroups = buildFallbackTrainStationGroups(
+    dep,
+    arr,
+    rows,
+    activeSegmentIndexes,
+  );
+  if (isTrainTimeAutomationEnabled() && selectedTrainStationGroups.length) {
+    drawTrainStations(dep, arr, selectedTrainStationGroups);
+  }
+}
+
+function normalizeTrainRunDate(value) {
+  const text = String(value || "");
+  const compact = text.match(/20\d{6}/)?.[0];
+  if (compact) return compact;
+  const separated = text.match(/(20\d{2})\D+(\d{1,2})\D+(\d{1,2})/);
+  if (!separated) return "";
+  return `${separated[1]}${separated[2].padStart(2, "0")}${separated[3].padStart(2, "0")}`;
+}
+
+function normalizeTrainNumber(value) {
+  const trainNo = String(value || "").trim();
+  if (!/^\d{1,6}$/.test(trainNo)) return "";
+  return trainNo.replace(/^0+(?=\d)/, "");
+}
+
+function normalizeTrainScheduleMetadata(value) {
+  if (!value || typeof value !== "object") return null;
+  const trainNo = normalizeTrainNumber(value.h_trn_no ?? value.trnNo ?? value.txtTrnNo ?? "");
+  if (!trainNo) return null;
+  return {
+    trainNo,
+    runDate: normalizeTrainRunDate(
+      value.h_run_dt ?? value.runDt ?? value.txtRunDt ?? value.h_dpt_dt ?? value.dptDt,
+    ),
+    trainGroupCode: String(
+      value.h_trn_gp_cd ?? value.trnGpCd ?? value.txtTrnGpCd ?? value.h_trn_clsf_cd ?? "00",
+    ).replace(/\D/g, "").slice(0, 6) || "00",
+  };
+}
+
+function collectTrainScheduleMetadataFromReact(row) {
+  const results = [];
+  const resultKeys = new Set();
+  const visited = new Set();
+
+  const scanProps = (value, depth = 0) => {
+    if (!value || typeof value !== "object" || depth > 5 || visited.size >= 500 || visited.has(value)) return;
+    visited.add(value);
+    const metadata = normalizeTrainScheduleMetadata(value);
+    if (metadata) {
+      const key = `${metadata.runDate}:${metadata.trainNo}:${metadata.trainGroupCode}`;
+      if (!resultKeys.has(key)) {
+        resultKeys.add(key);
+        results.push(metadata);
+      }
+    }
+
+    if (Array.isArray(value)) {
+      value.slice(0, 50).forEach((item) => scanProps(item, depth + 1));
+      return;
+    }
+    Object.keys(value).slice(0, 80).forEach((key) => {
+      if (["children", "_owner", "ref", "stateNode", "return", "child", "sibling"].includes(key)) return;
+      scanProps(value[key], depth + 1);
+    });
+  };
+
+  let node = row;
+  for (let ancestorDepth = 0; node && ancestorDepth < 3; ancestorDepth++, node = node.parentElement) {
+    Object.keys(node)
+      .filter((key) => key.startsWith("__react"))
+      .forEach((key) => {
+        const reactValue = node[key];
+        if (reactValue?.memoizedProps) {
+          let fiber = reactValue;
+          for (let fiberDepth = 0; fiber && fiberDepth < 10; fiberDepth++, fiber = fiber.return) {
+            scanProps(fiber.memoizedProps);
+            scanProps(fiber.pendingProps);
+            scanProps(fiber.memoizedState);
+            scanProps(fiber.stateNode?.props);
+            scanProps(fiber.stateNode?.state);
+          }
+        } else {
+          scanProps(reactValue);
+        }
+      });
+  }
+  return results;
+}
+
+function getDisplayedTrainNumbers(row) {
+  const lines = String(row?.innerText || row?.textContent || "")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const numbers = lines
+    .filter((line) => /^\d{1,6}$/.test(line))
+    .concat(lines.flatMap((line) => [...line.matchAll(/(?:KTX|ITX|무궁화|누리로|SRT)[^\d]{0,12}(\d{1,6})/gi)]
+      .map((match) => match[1])))
+    .map(normalizeTrainNumber)
+    .filter(Boolean);
+  return [...new Set(numbers)];
+}
+
+function getDisplayedTrainRunDate(row, metadata) {
+  const selectors = [
+    "#txtGoAbrdDt",
+    "input[name='txtGoAbrdDt']",
+    "input[id*='AbrdDt' i]",
+    "input[name*='AbrdDt' i]",
+    "input[type='date']",
+  ];
+  const values = [
+    ...selectors.flatMap((selector) => [...document.querySelectorAll(selector)]),
+    row,
+  ].map((element) => element?.value || element?.textContent || "");
+  const displayedDate = values.map(normalizeTrainRunDate).find(Boolean);
+  if (displayedDate) return displayedDate;
+  const metadataDates = [...new Set(metadata.map((item) => item.runDate).filter(Boolean))];
+  return metadataDates.length === 1 ? metadataDates[0] : "";
+}
+
+function getTrainScheduleMetadata(row, segmentIndex = 0) {
+  const metadata = collectTrainScheduleMetadataFromReact(row);
+  const displayedNumbers = getDisplayedTrainNumbers(row);
+  let trainNo = displayedNumbers[segmentIndex] || displayedNumbers[0] || "";
+  if (!trainNo) {
+    const metadataTrainNumbers = [...new Set(metadata.map((item) => item.trainNo).filter(Boolean))];
+    if (metadataTrainNumbers.length !== 1) return null;
+    [trainNo] = metadataTrainNumbers;
+  }
+
+  const matchingMetadata = metadata.filter((item) => item.trainNo === trainNo);
+  const selected = matchingMetadata.find((item) => item.runDate) || matchingMetadata[0] || null;
+  const runDate = selected?.runDate || getDisplayedTrainRunDate(row, matchingMetadata.length ? matchingMetadata : metadata);
+  if (!/^\d{8}$/.test(runDate) || !/^\d{1,6}$/.test(trainNo)) return null;
+  return {
+    runDate,
+    trainNo,
+    trainGroupCode: selected?.trainGroupCode || "00",
+  };
+}
+
+function requestTrainSchedule(metadata) {
+  const cacheKey = `${metadata.runDate}:${metadata.trainNo}:${metadata.trainGroupCode}`;
+  if (trainScheduleCache.has(cacheKey)) return trainScheduleCache.get(cacheKey);
+
+  const request = new Promise((resolve, reject) => {
+    const requestId = `korail-train-schedule-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const timer = setTimeout(() => {
+      window.removeEventListener("message", handleResponse);
+      reject(new Error("Train schedule request timed out."));
+    }, 8000);
+    const handleResponse = (event) => {
+      const response = event.data;
+      if (event.source !== window
+        || response?.type !== "KORAIL_MAP_API_RESPONSE"
+        || response.requestId !== requestId) return;
+      clearTimeout(timer);
+      window.removeEventListener("message", handleResponse);
+      if (!response.ok || !Array.isArray(response.data?.stations)) {
+        reject(new Error(response.error || "Train schedule request failed."));
+        return;
+      }
+      const stationNames = [];
+      response.data.stations.forEach((label) => {
+        const name = stationKey(label);
+        if (STATIONS[name] && stationNames.at(-1) !== name) stationNames.push(name);
+      });
+      resolve(stationNames);
+    };
+    window.addEventListener("message", handleResponse);
+    window.postMessage({
+      type: "KORAIL_MAP_API_REQUEST",
+      kind: "trainSchedule",
+      requestId,
+      ...metadata,
+    }, "*");
+  });
+  trainScheduleCache.set(cacheKey, request);
+  request.catch(() => trainScheduleCache.delete(cacheKey));
+  return request;
+}
+
+async function updateSelectedTrainStationsFromSchedule(
+  dep,
+  arr,
+  rows,
+  requestVersion,
+  activeSegmentIndexes,
+) {
+  const segments = rows.map((item) => item.segment || { dep, arr });
+  const transferStations = getTransferStationNames(segments);
+  const isCombinedTransfer = rows.length > 1
+    && rows.every((_, index) => activeSegmentIndexes.has(index));
+  const groups = await Promise.all(rows.map(async (item, index) => {
+    const segment = item.segment || { dep, arr };
+    if (!activeSegmentIndexes.has(index)) {
+      return { fullStations: [], activeStations: [], transferStations };
+    }
+    const fallbackRoute = getFallbackRouteStations(segment.dep, segment.arr);
+    const fallbackSegment = getFallbackSegmentStations(segment.dep, segment.arr);
+    const fallbackFullStations = getCombinedTransferFullStations(
+      fallbackRoute,
+      segment,
+      index,
+      rows.length,
+      isCombinedTransfer,
+    );
+    const metadata = getTrainScheduleMetadata(item.row, item.segmentIndex || 0);
+    if (!metadata) {
+      return {
+        fullStations: fallbackFullStations,
+        activeStations: fallbackSegment,
+        transferStations,
+      };
+    }
+
+    try {
+      const stationNames = await requestTrainSchedule(metadata);
+      if (stationNames.length < 2) throw new Error("Train schedule has no stations.");
+      const side = rows.length > 1
+        ? (index === 0 ? "leading" : index === rows.length - 1 ? "trailing" : "auto")
+        : "auto";
+      const segmentStations = sliceTrainStations(stationNames, segment.dep, segment.arr, side);
+      return {
+        fullStations: getCombinedTransferFullStations(
+          stationNames,
+          segment,
+          index,
+          rows.length,
+          isCombinedTransfer,
+        ),
+        activeStations: segmentStations,
+        transferStations,
+      };
+    } catch (error) {
+      console.warn("[Korail Map] Train schedule lookup failed; using local route:", error);
+      return {
+        fullStations: fallbackFullStations,
+        activeStations: fallbackSegment,
+        transferStations,
+      };
+    }
+  }));
+
+  if (requestVersion !== selectedTrainRowVersion
+    || dep !== currentBookingDep
+    || arr !== currentBookingArr
+    || !isTrainTimeAutomationEnabled()) return;
+  selectedTrainStationGroups = groups;
+  drawTrainStations(dep, arr, selectedTrainStationGroups);
+}
+
+async function updateTrainStationsFromUserTimeModal(buttonIndex, requestVersion, readVersion) {
+  const dep = currentBookingDep;
+  const arr = currentBookingArr;
+  const stationNames = await waitUserOpenedTrainTimeStations(readVersion);
+  if (stationNames.length < 2
+    || requestVersion !== selectedTrainRowVersion
+    || readVersion !== userTrainTimeReadVersion
+    || dep !== currentBookingDep
+    || arr !== currentBookingArr
+    || !isTrainTimeAutomationEnabled()) return;
+
+  const segments = getSelectedTrainSegments(dep, arr);
+  const modalSegment = stationNames.segment;
+  let groupIndex = modalSegment
+    ? segments.findIndex((segment) => segment.dep === modalSegment.dep && segment.arr === modalSegment.arr)
+    : -1;
+  if (groupIndex < 0) groupIndex = Math.min(buttonIndex, segments.length - 1);
+
+  const segment = modalSegment || segments[groupIndex] || { dep, arr };
+  const side = segments.length > 1
+    ? (groupIndex === 0 ? "leading" : groupIndex === segments.length - 1 ? "trailing" : "auto")
+    : "auto";
+  const activeStations = sliceTrainStations(stationNames, segment.dep, segment.arr, side);
+  const fullStations = stationNames;
+  const transferStations = getTransferStationNames(segments);
+
+  if (selectedTrainStationGroups.length !== segments.length) {
+    selectedTrainStationGroups = buildFallbackTrainStationGroups(dep, arr);
+  }
+  selectedTrainStationGroups[groupIndex] = {
+    fullStations,
+    activeStations,
+    transferStations,
+  };
+  drawTrainStations(dep, arr, selectedTrainStationGroups);
+}
+
 // 정차역 그룹을 지도 위에 회색/파란색 노선으로 그립니다.
 
 function drawTrainStations(dep, arr, stationGroups) {
@@ -1130,22 +1532,14 @@ function drawTrainStations(dep, arr, stationGroups) {
     if (!STATIONS[name]) return;
     const coords = STATIONS[name];
     if (!Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) return;
-    const isDep = name === dep;
-    const isArr = name === arr;
-    const isTransfer = transferMarkerNames.has(name) && !isDep && !isArr;
     if (activeMarkerNames.has(name)) return;
-    const dotClass = isDep ? "is-dep" : isArr ? "is-arr" : "is-gray";
-    const isLabel = isDep || isArr;
+    const isTransfer = transferMarkerNames.has(name);
     const markerSize = isTransfer ? 15 : 7;
     const icon = L.divIcon({
       className: "",
-      html: `<div class="korail-dot-wrap ${isLabel ? "is-label" : ""}">
-          ${isLabel
-          ? `<span class="korail-dot-label ${dotClass}">${stationName(name)}</span>`
-          : `<div class="korail-dot ${dotClass}${isTransfer ? " is-transfer" : ""}"></div>`}
-              </div>`,
-      iconSize: isLabel ? [0, 0] : [markerSize, markerSize],
-      iconAnchor: isLabel ? [0, 0] : [markerSize / 2, markerSize / 2],
+      html: `<div class="korail-dot-wrap"><div class="korail-dot is-gray${isTransfer ? " is-transfer" : ""}"></div></div>`,
+      iconSize: [markerSize, markerSize],
+      iconAnchor: [markerSize / 2, markerSize / 2],
     });
     L.marker([coords.lat, coords.lng], { icon })
       .addTo(map)
@@ -1258,73 +1652,10 @@ function getBottomBarInfo() {
   return btn ? { type: "single", timeBtns: [btn] } : { type: "none", timeBtns: [] };
 }
 
-// 하단바가 나타날 때까지 기다립니다.
-
-function waitBottomBar(timeout = isGlobalTicketPage() ? 1400 : 3000, stableDuration = isGlobalTicketPage() ? 80 : 200) {
-  return new Promise((resolve) => {
-    const startedAt = Date.now();
-    let lastButtonCount = -1;
-    let stableStartedAt = startedAt;
-    const tick = () => {
-      const info = getBottomBarInfo();
-      const now = Date.now();
-      if (info.timeBtns.length !== lastButtonCount) {
-        lastButtonCount = info.timeBtns.length;
-        stableStartedAt = now;
-      }
-      if (
-        (info.timeBtns.length > 0 && now - stableStartedAt >= stableDuration)
-        || now - startedAt >= timeout
-      ) {
-        resolve(info);
-        return;
-      }
-      setTimeout(tick, 80);
-    };
-    tick();
-  });
-}
-
 // 선택된 열차의 하단 바 열차시각 버튼을 찾습니다. (기존 호환용)
 
 function findSelectedBottomTrainTimeButton() {
   return getBottomBarInfo().timeBtns[0] || null;
-}
-
-// 하단 바 열차시각 버튼이 나타날 때까지 기다립니다. (기존 호환용)
-
-function waitBottomTrainTimeButton(timeout = 2500) {
-  return new Promise((resolve) => {
-    const startedAt = Date.now();
-    const tick = () => {
-      const button = findSelectedBottomTrainTimeButton();
-      if (button || Date.now() - startedAt >= timeout) {
-        resolve(button);
-        return;
-      }
-      setTimeout(tick, 80);
-    };
-    tick();
-  });
-}
-
-// 환승 구간의 fullStations/activeStations 배열들을 환승역 기준으로 병합합니다.
-
-function mergeTransferStationLists(lists) {
-  if (!lists.length) return [];
-  let merged = [...lists[0]];
-  for (let i = 1; i < lists.length; i++) {
-    const next = lists[i];
-    // 앞 구간의 마지막 역(환승역)이 다음 구간에 있으면 그 위치부터 이어 붙임
-    const transferStation = merged.at(-1);
-    const overlapIdx = next.indexOf(transferStation);
-    if (overlapIdx >= 0) {
-      merged = merged.concat(next.slice(overlapIdx + 1));
-    } else {
-      merged = merged.concat(next);
-    }
-  }
-  return merged;
 }
 
 function getTransferStationNames(segments) {
@@ -1339,221 +1670,6 @@ function getTransferStationNames(segments) {
   return transferStations;
 }
 
-// 행을 클릭한 뒤 하단바가 해당 행 기준으로 갱신될 때까지 기다려 정차역을 읽습니다.
-
-async function fetchStationsViaBottomBar(row, segmentDep, segmentArr) {
-  // 현재 하단바 버튼 위치를 기억해두고 변경을 감지합니다.
-  const prevBtn = findSelectedBottomTrainTimeButton();
-  const prevTop = prevBtn?.getBoundingClientRect().top ?? -1;
-
-  row.click();
-
-  // 하단바가 새 행 기준으로 갱신될 때까지 대기 (버튼 위치 또는 내용 변경 감지)
-  await new Promise((resolve) => {
-    const started = Date.now();
-    const tick = () => {
-      const btn = findSelectedBottomTrainTimeButton();
-      const top = btn?.getBoundingClientRect().top ?? -1;
-      // 버튼이 새로 나타났거나 위치가 바뀌면 갱신된 것으로 판단
-      if (btn && top !== prevTop) { resolve(); return; }
-      if (Date.now() - started > 2000) { resolve(); return; }
-      setTimeout(tick, 80);
-    };
-    tick();
-  });
-
-  const timeBtn = findSelectedBottomTrainTimeButton();
-  if (!timeBtn) return [];
-  await waitModalGone(300);
-  const stationNames = await waitTrainTimeStations(timeBtn);
-
-  // segmentDep/segmentArr 기준으로 방향이 맞는지 확인 후 보정
-  if (stationNames.length >= 2 && segmentDep && segmentArr) {
-    const depIdx = stationNames.indexOf(segmentDep);
-    const arrIdx = stationNames.indexOf(segmentArr);
-    // 역방향이면 뒤집기
-    if (depIdx > arrIdx && depIdx >= 0 && arrIdx >= 0) {
-      stationNames.reverse();
-    }
-  }
-
-  return stationNames;
-}
-
-// 하단 바 열차시각 모달을 열어 정차역을 지도에 반영합니다.
-// 단일/환승 여부를 .absol 존재로 판단하고 각각 처리합니다.
-
-async function fetchBottomBarTrainStations(dep, arr, requestVersion = selectedTrainRowVersion) {
-  if (requestVersion === completedTrainStationsRequestVersion) return;
-  if (isFetchingTrainStations) {
-    if (requestVersion !== activeTrainStationsRequestVersion) {
-      pendingTrainStationsRequest = { dep, arr, requestVersion };
-    }
-    return;
-  }
-  isFetchingTrainStations = true;
-  activeTrainStationsRequestVersion = requestVersion;
-
-  try {
-    const barInfo = await waitBottomBar(isGlobalTicketPage() ? 1400 : 2500);
-    if (requestVersion !== selectedTrainRowVersion) return;
-    console.warn("[Korail] barInfo.type:", barInfo.type, "버튼수:", barInfo.timeBtns.length);
-    if (barInfo.type === "none") return;
-
-    if (barInfo.timeBtns.length === 1) {
-      // 단일 열차
-      const [timeBtn] = barInfo.timeBtns;
-      await waitModalGone(isGlobalTicketPage() ? 120 : 300);
-      const stationNames = await waitTrainTimeStations(timeBtn);
-      if (requestVersion !== selectedTrainRowVersion) return;
-      console.warn("[Korail] 단일 stationNames:", stationNames);
-      if (stationNames.length < 2) return;
-
-      const segment = stationNames.segment || getSelectedRowSegment() || getBottomBarSegment() || { dep, arr };
-      const segmentDep = segment.dep || dep;
-      const segmentArr = segment.arr || arr;
-      const transferStations = getTransferStationNames(
-        (selectedTrainRow ? getConnectedTrainRows(selectedTrainRow) : [])
-          .map((item) => item.segment)
-          .filter(Boolean),
-      );
-
-      drawTrainStations(dep, arr, [{
-        fullStations: stationNames,
-        activeStations: sliceTrainStations(stationNames, segmentDep, segmentArr, "auto"),
-        transferStations,
-      }]);
-      completedTrainStationsRequestVersion = requestVersion;
-
-    } else {
-      // 현재 하단바에 표시된 환승 열차시각 버튼을 모두 다시 조회합니다.
-      const fullStationsList = [];
-      const activeStationsList = [];
-      const parsedSegments = getBottomBarTransferSegments();
-      const segments = parsedSegments.length ? parsedSegments : getTransferSegmentsFromSelectedRow();
-      const resolvedSegments = [];
-      console.warn("[Korail] 환승 segments:", segments);
-
-      for (let i = 0; i < barInfo.timeBtns.length; i++) {
-        const timeBtn = barInfo.timeBtns[i];
-        await waitModalGone(isGlobalTicketPage() ? 120 : 300);
-        const stationNames = await waitTrainTimeStations(timeBtn);
-        if (requestVersion !== selectedTrainRowVersion) return;
-        const modalSegment = stationNames.segment || segments[i];
-        const segmentDep = modalSegment?.dep || (i === 0 ? dep : segments[i - 1]?.arr || dep);
-        const segmentArr = modalSegment?.arr || (i === barInfo.timeBtns.length - 1 ? arr : dep);
-        resolvedSegments.push({ dep: segmentDep, arr: segmentArr });
-        const side = i === 0 ? "leading" : i === barInfo.timeBtns.length - 1 ? "trailing" : "auto";
-        const fullStations = stationNames.length >= 2
-          ? sliceTrainStations(stationNames, segmentDep, segmentArr, side)
-          : getFallbackSegmentStations(segmentDep, segmentArr);
-        const activeStations = stationNames.length >= 2
-          ? sliceTrainStations(
-              stationNames,
-              segmentDep,
-              segmentArr,
-              side,
-            )
-          : getFallbackSegmentStations(segmentDep, segmentArr);
-        console.warn(`[Korail] 구간 ${i + 1} (${segmentDep}→${segmentArr}) 활성역:`, activeStations);
-        fullStationsList.push(fullStations);
-        activeStationsList.push(activeStations);
-      }
-
-      if (resolvedSegments.length === 2 && resolvedSegments[1]?.arr === resolvedSegments[0]?.dep) {
-        resolvedSegments.reverse();
-        fullStationsList.reverse();
-        activeStationsList.reverse();
-      }
-
-      const mergedFull = mergeTransferStationLists(fullStationsList);
-      const mergedActive = mergeTransferStationLists(activeStationsList);
-      const transferStations = getTransferStationNames(resolvedSegments);
-      console.warn("[Korail] 병합된 활성역:", mergedActive);
-
-      if (mergedActive.length >= 2) {
-        drawTrainStations(dep, arr, [{
-          fullStations: mergedFull,
-          activeStations: mergedActive,
-          transferStations,
-        }]);
-        completedTrainStationsRequestVersion = requestVersion;
-      }
-    }
-  } finally {
-    isFetchingTrainStations = false;
-    activeTrainStationsRequestVersion = -1;
-    const pendingRequest = pendingTrainStationsRequest;
-    pendingTrainStationsRequest = null;
-    if (pendingRequest && pendingRequest.requestVersion === selectedTrainRowVersion) {
-      fetchBottomBarTrainStations(
-        pendingRequest.dep,
-        pendingRequest.arr,
-        pendingRequest.requestVersion,
-      );
-    }
-  }
-}
-
-// 단일 열차 하단바에서 구간 정보를 파싱합니다.
-
-function getBottomBarSegment() {
-  const bottomBar = findBottomBarContainer();
-  if (bottomBar) {
-    const seg = parseSegmentFromText(bottomBar.textContent || "");
-    if (seg) return seg;
-  }
-
-  const containers = [
-    bottomBar?.querySelector(".reserv_center"),
-    bottomBar?.querySelector(".reserv_wrapbtn"),
-  ].filter(Boolean);
-  for (const el of containers) {
-    const text = el.parentElement?.textContent || el.textContent || "";
-    const seg = parseSegmentFromText(text);
-    if (seg) return seg;
-  }
-  return null;
-}
-
-function getSelectedRowSegment() {
-  if (selectedTrainSegment?.dep && selectedTrainSegment?.arr) {
-    return selectedTrainSegment;
-  }
-
-  if (selectedTrainRow?.isConnected) {
-    const segment = getTrainRowSegment(selectedTrainRow);
-    if (segment?.dep && segment?.arr) return segment;
-  }
-
-  const bottomBar = findBottomBarContainer();
-  const rowAboveBottomBar = getRowAboveBottomBar(bottomBar);
-  const segment = getTrainRowSegment(rowAboveBottomBar);
-  return segment?.dep && segment?.arr ? segment : null;
-}
-
-// 환승 하단바(.absol)에서 선행/후행 구간 정보를 파싱합니다.
-
-function getBottomBarTransferSegments() {
-  const absol = [...document.querySelectorAll(".absol")]
-    .find((el) => isVisibleElement(el));
-  if (!absol) return [];
-  const sections = [...absol.querySelectorAll(".two01, .one01, [class*='section'], [class*='part']")];
-  if (sections.length >= 2) {
-    const parsed = sections.map((sec) => parseSegmentFromText(sec.textContent || "")).filter(Boolean);
-    if (parsed.length) return parsed;
-  }
-
-  // 섹션 구분이 안 되면 absol 전체 텍스트에서 → 기준으로 분리
-  const text = absol.textContent || "";
-  const arrows = [...text.matchAll(/([^→]+)→([^→]+)/g)];
-  return arrows.map((m) => {
-    const d = stationKey(findStationKeyInText(m[1]) || findStationInText(m[1]));
-    const a = stationKey(findStationKeyInText(m[2]) || findStationInText(m[2]));
-    return d && a ? { dep: d, arr: a } : null;
-  }).filter(Boolean);
-}
-
 // 텍스트에서 출발→도착 구간을 파싱합니다.
 
 function parseSegmentFromText(text) {
@@ -1564,88 +1680,6 @@ function parseSegmentFromText(text) {
   const d = stationKey(findStationKeyInText(left) || findStationInText(left));
   const a = stationKey(findStationKeyInText(right) || findStationInText(right));
   return d && a ? { dep: d, arr: a } : null;
-}
-
-function getTransferSegmentsFromSelectedRow() {
-  const selectedRows = selectedTransferRouteGroups.get(selectedTransferRouteKey);
-  if (selectedRows?.length) {
-    const selectedSegments = selectedRows
-      .map((item) => item.segment)
-      .filter((segment) => segment?.dep && segment?.arr);
-    if (selectedSegments.length) {
-      console.warn("[Korail] selected row segments:", selectedSegments);
-      return selectedSegments;
-    }
-  }
-
-  const bottomBar = findBottomBarContainer();
-  const rowAboveBottomBar = getRowAboveBottomBar(bottomBar);
-  if (!rowAboveBottomBar) return [];
-
-  const segments = getConnectedTrainRows(rowAboveBottomBar)
-    .map((item) => item.segment)
-    .filter((segment) => segment?.dep && segment?.arr);
-
-  console.warn("[Korail] row fallback segments:", segments);
-  return segments;
-}
-
-// 열차 행 기준으로 정차역을 조회해 지도에 반영합니다.
-
-async function fetchTrainStations(dep, arr, clickedRow) {
-  const rows = clickedRow ? getConnectedTrainRows(clickedRow) : [{ row: null, segment: { dep, arr } }];
-  const fullStationsList = [];
-  const activeStationsList = [];
-  const transferStations = getTransferStationNames(
-    rows.map((item) => item.segment).filter((segment) => segment?.dep && segment?.arr)
-  );
-
-  isFetchingTrainStations = true;
-  try {
-    for (const item of rows) {
-      await waitModalGone(1000);
-
-      const timeBtn = await getTrainTimeButton(item.row, item.segmentIndex);
-      const stationNames = await waitTrainTimeStations(timeBtn);
-
-      await waitModalGone(800);
-
-      const segmentDep = item.segment?.dep || dep;
-      const segmentArr = item.segment?.arr || arr;
-      const side = rows.length > 1
-        ? (item === rows[0] ? "leading" : item === rows.at(-1) ? "trailing" : "auto")
-        : "auto";
-      const fullStations = stationNames.length >= 2
-          ? sliceTrainStations(stationNames, segmentDep, segmentArr, side)
-          : getFallbackSegmentStations(segmentDep, segmentArr);
-      const activeStations = stationNames.length >= 2
-        ? sliceTrainStations(
-            stationNames,
-            segmentDep,
-            segmentArr,
-            side,
-          )
-        : getFallbackSegmentStations(segmentDep, segmentArr);
-
-      fullStationsList.push(fullStations);
-      activeStationsList.push(activeStations);
-
-      await waitModalGone(500);
-    }
-
-    const mergedFull = mergeTransferStationLists(fullStationsList);
-    const mergedActive = mergeTransferStationLists(activeStationsList);
-
-    if (mergedActive.length >= 2) {
-      drawTrainStations(dep, arr, [{
-        fullStations: mergedFull,
-        activeStations: mergedActive,
-        transferStations,
-      }]);
-    }
-  } finally {
-    isFetchingTrainStations = false;
-  }
 }
 
 }); // waitForL

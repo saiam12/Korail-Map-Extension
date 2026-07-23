@@ -15,7 +15,6 @@ waitForL(() => {
   const nearestCacheTtlMs = 7 * 24 * 60 * 60 * 1000;
   const nearestSearchWindowMs = 60 * 1000;
   const nearestSearchLimit = 5;
-  let mainToggleWatchRaf = 0;
   let mainToggleContainer = null;
 
   function resetMainToggleContainer() {
@@ -31,6 +30,12 @@ waitForL(() => {
 
   function cleanup() {
     // 열차 목록이 사라지면 지도 패널도 정리
+    const panel = document.getElementById("korail-map-panel");
+    if (panel && window._korailMapInstance) {
+      window._korailMapInstance.remove();
+      window._korailMapInstance = null;
+    }
+
     const wrapper = document.getElementById("korail-map-wrapper");
     if (wrapper) {
       // tckWrap을 wrapper 밖으로 복원 후 wrapper 제거
@@ -38,15 +43,12 @@ waitForL(() => {
       if (tckWrap) wrapper.parentNode.insertBefore(tckWrap, wrapper);
       wrapper.remove();
     }
-    const panel = document.getElementById("korail-map-panel");
-    if (panel) panel.remove();
+    if (panel?.isConnected) panel.remove();
   }
 
   // 홈 화면 가까운 역 패널과 버튼을 제거합니다.
 
   function cleanupHomeNearestPanel() {
-    window.cancelAnimationFrame(mainToggleWatchRaf);
-    mainToggleWatchRaf = 0;
     resetMainToggleContainer();
     const panel = document.getElementById(HOME_PANEL_ID);
     if (panel) panel.remove();
@@ -1412,44 +1414,7 @@ waitForL(() => {
       `;
     }
 
-    function layoutRectKey(rect, containerRect) {
-      return rect
-        ? [
-          rect.top - (containerRect?.top || 0),
-          rect.left - (containerRect?.left || 0),
-          rect.width,
-          rect.height,
-        ].map((value) => value.toFixed(2)).join(",")
-        : "";
-    }
-
-    function mainLayoutKey() {
-      const controls = findMainBookingControls();
-      if (!controls) return mainToggleContainer?.isConnected ? "mounted" : "";
-      const container = controls.arrival?.closest(".ticketWrap")
-        || controls.lookup?.closest(".ticketWrap")
-        || controls.area;
-      const containerRect = container?.getBoundingClientRect();
-      return [
-        containerRect ? `${containerRect.width.toFixed(2)},${containerRect.height.toFixed(2)}` : "",
-        layoutRectKey(controls.arrival?.getBoundingClientRect(), containerRect),
-        layoutRectKey(controls.lookup?.getBoundingClientRect(), containerRect),
-      ].join("|");
-    }
-
     positionToggleBtn();
-    let previousLayoutKey = mainLayoutKey();
-    function watchMainLayout() {
-      if (!toggleHost.isConnected) return;
-      const nextLayoutKey = mainLayoutKey();
-      if (nextLayoutKey !== previousLayoutKey) {
-        previousLayoutKey = nextLayoutKey;
-        positionToggleBtn();
-        positionIntroNearestPanel(panel);
-      }
-      mainToggleWatchRaf = window.requestAnimationFrame(watchMainLayout);
-    }
-    mainToggleWatchRaf = window.requestAnimationFrame(watchMainLayout);
     updateNearestDisabledState();
 
     let relayoutRaf = 0;
@@ -1504,6 +1469,13 @@ waitForL(() => {
       if (el) el.classList.toggle("is-korail-muted", behind);
     });
   }
+
+  function isExtensionMapMutation(record) {
+    const target = record?.target?.nodeType === 1
+      ? record.target
+      : record?.target?.parentElement;
+    return !!target?.closest?.("#korail-map-panel, #korail-station-map-popup, .leaflet-container");
+  }
   
   function observeBookingOptionPopup() {
     let wasOpen = null;
@@ -1515,7 +1487,9 @@ waitForL(() => {
       setNearestPanelZIndex(isOpen);
       updateNearestDisabledState();
     };
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver((records) => {
+      const hasRelevantMutation = records.some((record) => !isExtensionMapMutation(record));
+      if (!hasRelevantMutation) return;
       if (syncScheduled) return;
       syncScheduled = true;
       requestAnimationFrame(() => {

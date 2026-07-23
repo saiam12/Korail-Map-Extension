@@ -5,14 +5,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.type === "KORAIL_SUPPORT_SUBMIT") {
     handleSupportSubmit(request, sender)
-      .then(() => sendResponse({ ok: true }))
+      .then((data) => sendResponse({ ok: true, data }))
       .catch((error) => sendResponse({ ok: false, error: error.message || "Feedback submission failed." }));
     return true;
   }
 
   if (request.type !== "KORAIL_MAP_API_REQUEST") return false;
 
-  handleNaverApiRequest(request)
+  handleApiRequest(request)
     .then((data) => sendResponse({ ok: true, data }))
     .catch((error) => sendResponse({
       ok: false,
@@ -21,6 +21,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }));
   return true;
 });
+
+function handleApiRequest(request) {
+  if (request.kind === "trainSchedule") return requestKorailTrainSchedule(request);
+  return handleNaverApiRequest(request);
+}
 
 function isKorailSender(sender) {
   return /^https:\/\/(www\.)?korail\.com\//.test(sender.tab?.url || sender.url || "");
@@ -47,7 +52,13 @@ async function handleSupportSubmit(request, sender) {
     },
     body: formData,
   });
+  const data = await response.json().catch(() => null);
   if (!response.ok) throw new Error(`Feedback submission failed: ${response.status}`);
+  return {
+    accepted: true,
+    status: response.status,
+    response: data,
+  };
 }
 
 async function handleNaverApiRequest(request) {
@@ -76,6 +87,49 @@ async function handleNaverApiRequest(request) {
       goalLng: request.goalLng,
     };
   return requestProxy(proxyUrl.href, payload);
+}
+
+async function requestKorailTrainSchedule(request) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
+  try {
+    const response = await fetch("https://www.korail.com/classes/com.korail.mobile.trainsInfo.TrainSchedule", {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      },
+      body: new URLSearchParams({
+        Device: "AD",
+        Version: "999999999",
+        txtRunDt: request.runDate,
+        txtTrnNo: request.trainNo,
+        txtTrnGpCd: request.trainGroupCode || "00",
+      }),
+    });
+    const data = await response.json().catch(() => null);
+    const timeInfo = data?.time_infos?.time_info;
+    if (!response.ok || data?.h_msg_cd !== "IRZ000001" || !Array.isArray(timeInfo)) {
+      const error = new Error(data?.h_msg_txt || `Train schedule HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return {
+      runDate: request.runDate,
+      trainNo: request.trainNo,
+      stations: timeInfo
+        .map((item) => item?.h_stop_rs_stn_nm || item?.h_stop_rs_stn_eng_nm || "")
+        .filter(Boolean),
+    };
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("Train schedule request timed out.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function requestProxy(url, payload) {

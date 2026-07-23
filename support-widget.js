@@ -4,11 +4,6 @@
 
   const isKorean = () => window.KORAIL_SHARED?.getKorailLocale?.() === "ko";
   const text = (ko, en) => isKorean() ? ko : en;
-  const trainTimeAutomationStorageKey = "korail-map-train-time-automation";
-  const isStoredToggleEnabled = (key) => {
-    try { return localStorage.getItem(key) !== "false"; }
-    catch { return true; }
-  };
   const officialCenterUrl = "https://info.korail.com/mbs/www/jsp/voc/explorer";
   const restaurantGuideUrls = {
     ko: "https://korean.visitkorea.or.kr/main/area_chart.do",
@@ -38,11 +33,6 @@
       </header>
       <div class="korail-support-choice">
         <p class="korail-support-choice__notice"></p>
-        <label class="korail-support-debug-toggle">
-          <span class="korail-support-debug-toggle__copy"><strong data-train-time-automation-label></strong><small data-train-time-automation-description></small></span>
-          <input type="checkbox" data-train-time-automation>
-          <span class="korail-support-debug-toggle__switch" aria-hidden="true"></span>
-        </label>
         <button type="button" class="korail-support-choice__item" data-support-choice="nearest"><strong></strong><span></span></button>
         <button type="button" class="korail-support-choice__item" data-support-choice="inquiry"><strong></strong><span></span></button>
         <button type="button" class="korail-support-choice__item" data-support-choice="restaurant"><strong></strong><span></span></button>
@@ -86,16 +76,12 @@
   const choice = by(".korail-support-choice");
   const inquiry = by(".korail-support-inquiry");
   const feedback = by(".korail-support-feedback");
-  const trainTimeAutomationToggle = by("[data-train-time-automation]");
   const nearest = by(".korail-support-nearest");
   const nearestChoice = by("[data-support-choice='nearest']");
   const isBookingPage = () => /\/ticket\/search\//.test(location.pathname) || !!document.querySelector(".tckWrap");
   const setLabels = () => {
     by("#korail-support-title").textContent = text("서비스 안내", "Support");
     by(".korail-support-choice__notice").textContent = text("에러코드가 표시되면 페이지가 자동으로 새로고침됩니다.", "The page refreshes automatically when an error code appears.");
-    by("[data-train-time-automation-label]").textContent = text("지도 중간역 표시", "Show intermediate stations on the map");
-    by("[data-train-time-automation-description]").textContent = text("조회를 위한 깜빡임이 있을 수 있습니다.\n운임요금 버튼 이용 시 해제 후 사용하세요.", "The screen may briefly flicker while loading. Turn this off before using the Fare button.");
-    trainTimeAutomationToggle.checked = isStoredToggleEnabled(trainTimeAutomationStorageKey);
     by("[data-support-choice='nearest'] strong").textContent = text("가까운 주요역 찾기", "Find nearby major stations");
     by("[data-support-choice='nearest'] span").textContent = text("주소를 기준으로 가까운 주요역을 찾습니다.", "Find nearby major stations by address.");
     // 서비스 안내의 가까운 주요역 찾기는 임시 비활성화합니다.
@@ -150,10 +136,6 @@
   by("[data-support-choice='extension']").addEventListener("click", () => { inquiry.hidden = true; feedback.hidden = false; by("textarea").focus(); });
   by("[data-support-choice='korail']").addEventListener("click", () => window.open(officialCenterUrl, "_blank", "noopener"));
   by("[data-support-choice='restaurant']").addEventListener("click", () => window.open(restaurantGuideUrl(), "_blank", "noopener"));
-  trainTimeAutomationToggle.addEventListener("change", () => {
-    try { localStorage.setItem(trainTimeAutomationStorageKey, String(trainTimeAutomationToggle.checked)); }
-    catch { /* 저장할 수 없는 환경에서는 기본값을 사용합니다. */ }
-  });
   by("[data-nearest-current-location]").addEventListener("click", async () => {
     const button = by("[data-nearest-current-location]");
     const input = by(".korail-support-nearest__form input[name='address']");
@@ -201,7 +183,7 @@
       const timer = setTimeout(() => finish(() => reject(new Error("timeout"))), 15000);
       const handler = (event) => {
         if (event.source !== window || event.data?.type !== "KORAIL_SUPPORT_RESPONSE" || event.data.requestId !== requestId) return;
-        if (event.data.ok) finish(resolve);
+        if (event.data.ok && event.data.result?.accepted === true) finish(() => resolve(event.data.result));
         else finish(() => reject(new Error(event.data.error || "Feedback submission failed.")));
       };
       window.addEventListener("message", handler);
@@ -212,14 +194,15 @@
   by(".korail-support-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const status = by(".korail-support-form__status");
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const submit = by(".korail-support-form__submit");
     submit.disabled = true;
     status.dataset.state = "";
     status.textContent = text("전송 중…", "Sending…");
     try {
       await submitToBackground({ category: form.get("category"), message: form.get("message"), contact: form.get("contact"), pageUrl: location.href, locale: window.KORAIL_SHARED?.getKorailLocale?.() || "unknown" });
-      event.currentTarget.reset();
+      formElement.reset();
       status.dataset.state = "success";
       status.textContent = text("🎉 문의가 성공적으로 전달되었습니다.", "🎉 Your feedback has been sent successfully.");
     } catch (error) {

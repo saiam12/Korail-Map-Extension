@@ -1,8 +1,7 @@
 // content.js는 페이지 컨텍스트에 나머지 스크립트를 순서대로 주입하는 역할만 합니다.
 
 const FILES = ["leaflet.js", "station-data.js", "station-translations.js", "map-panel.js", "injected-core.js", "support-widget.js", "home-panel.js", "station-popup.js", "booking-map.js"];
-const SUPPORT_FEEDBACK_ENDPOINT = "https://formspree.io/f/mlgqdgbp";
-const INJECTED_RESOURCE_VERSION = "20260721-0850";
+const INJECTED_RESOURCE_VERSION = "20260723-2102";
 
 window.addEventListener("message", async (event) => {
   if (event.source !== window) return;
@@ -22,8 +21,8 @@ window.addEventListener("message", async (event) => {
   if (request.type === "KORAIL_SUPPORT_SUBMIT") {
     if (!isValidPageRequest(request)) return;
     try {
-      await submitSupportFeedback(request.payload);
-      window.postMessage({ type: "KORAIL_SUPPORT_RESPONSE", requestId: request.requestId, ok: true }, "*");
+      const result = await submitSupportFeedback(request.payload);
+      window.postMessage({ type: "KORAIL_SUPPORT_RESPONSE", requestId: request.requestId, ok: true, result }, "*");
     } catch (error) {
       window.postMessage({ type: "KORAIL_SUPPORT_RESPONSE", requestId: request.requestId, ok: false, error: error.message || "Feedback submission failed." }, "*");
     }
@@ -55,20 +54,14 @@ window.addEventListener("message", async (event) => {
 });
 
 async function submitSupportFeedback(payload) {
-  const response = await fetch(SUPPORT_FEEDBACK_ENDPOINT, {
-    method: "POST",
-    headers: { "Accept": "application/json" },
-    body: new URLSearchParams({
-      category: payload.category,
-      message: payload.message,
-      contact: payload.contact,
-      pageUrl: location.href,
-      locale: payload.locale || "unknown",
-    }),
+  const response = await sendToBackground({
+    type: "KORAIL_SUPPORT_SUBMIT",
+    payload,
   });
-  if (!response.ok) {
-    throw new Error(`Feedback submission failed: ${response.status}`);
+  if (response?.ok !== true || response?.data?.accepted !== true) {
+    throw new Error(response?.error || "Feedback submission failed.");
   }
+  return response.data;
 }
 
 function isValidPageRequest(request) {
@@ -85,6 +78,11 @@ function isValidPageRequest(request) {
   }
   if (request.kind === "driving") {
     return [request.startLat, request.startLng, request.goalLat, request.goalLng].every(Number.isFinite);
+  }
+  if (request.kind === "trainSchedule") {
+    return /^\d{8}$/.test(request.runDate || "")
+      && /^\d{1,6}$/.test(request.trainNo || "")
+      && /^\d{0,6}$/.test(request.trainGroupCode || "");
   }
   return request.kind === "locationReverse" && Number.isFinite(request.lat) && Number.isFinite(request.lng);
 }

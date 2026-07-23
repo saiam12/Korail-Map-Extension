@@ -19,13 +19,21 @@ waitForL(() => {
     });
   }
 
+  function mutationTouchesStationPopup(records) {
+    const selector = ".layerWrap.type_tranin-station-pop_wrap";
+    const containsPopup = (node) => node?.nodeType === 1
+      && (node.matches(selector) || node.querySelector(selector));
+    return records.some((record) => [...record.addedNodes, ...record.removedNodes].some(containsPopup));
+  }
+
   // Station Information 팝업 생성/제거를 감시합니다.
   function observeStationPopup() {
-    const observer = new MutationObserver(() => {
+    const syncStationPopup = () => {
       const popup = document.querySelector(".layerWrap.type_tranin-station-pop_wrap");
       const existing = document.getElementById("korail-station-map-popup");
 
       if (document.documentElement.dataset.korailStationSwap === "true") {
+        existing?._korailCleanup?.();
         existing?.remove();
         popup?.querySelector(".korail-station-tracking-toggle")?.remove();
         return;
@@ -35,11 +43,17 @@ waitForL(() => {
         setNearestPanelBehindPopup(true);
         showStationMapPopup(popup);
       } else if (!popup && existing) {
+        existing._korailCleanup?.();
         existing.remove();
         setNearestPanelBehindPopup(false);
       }
+    };
+    const observer = new MutationObserver((records) => {
+      if (!mutationTouchesStationPopup(records)) return;
+      syncStationPopup();
     });
     observer.observe(document.body, { childList: true, subtree: true });
+    syncStationPopup();
   }
 
   // Station Information 팝업 옆에 지도 영역을 표시합니다.
@@ -72,7 +86,8 @@ waitForL(() => {
     const currentArr = getCurrentStationKey("arr");
 
     // Initialize the map after the popup size is fixed.
-    setTimeout(() => {
+    const renderTimer = setTimeout(() => {
+      if (!mapPopup.isConnected || !popup.isConnected) return;
       const popupRect = popup.getBoundingClientRect();
       const mapHeight = popupRect.height;
 
@@ -82,8 +97,9 @@ waitForL(() => {
       mapPopup.style.width = mapWidth + "px";
       mapPopup.style.height = mapHeight + "px";
       // Render after the map container has been placed.
-      renderStationMap(mapPopup, popup, currentDep, currentArr);
+      mapPopup._korailCleanup = renderStationMap(mapPopup, popup, currentDep, currentArr);
     }, 50);
+    mapPopup._korailCleanup = () => clearTimeout(renderTimer);
   }
 
   observeStationPopup();
