@@ -23,13 +23,20 @@ waitForL(() => {
   var userTrainTimeClickBound = false;
   var userTrainFareClickBound = false;
   var trainRowClickBound = false;
+  var globalTrainMapSelectionVersion = 0;
   const trainScheduleCache = new Map();
   const trainFareCache = new Map();
+  const trainFareMetadataCache = new WeakMap();
   let trainFareQueue = Promise.resolve();
   let lastTrainFareRequestAt = 0;
   let trainFareLookupsBlocked = false;
   let trainFareRefreshRunning = false;
   let trainFareRefreshRequested = false;
+  let trainFareStartFrame = null;
+  let trainFarePauseUntil = 0;
+  let trainFareResumeTimer = null;
+  let activeTrainFareRequest = null;
+  const GLOBAL_TRAIN_FARE_INTERACTION_PAUSE_MS = 500;
   const isTrainTimeAutomationEnabled = () => true;
 
   function getStationFields(type) {
@@ -316,15 +323,12 @@ waitForL(() => {
 
         button.dataset.swapBusy = "true";
         button.disabled = true;
-        const hideGlobalPicker = isGlobalTicketPage();
-        if (hideGlobalPicker) document.documentElement.dataset.korailStationSwap = "true";
         try {
           const swapped = await swapStationsThroughPicker(currentDep, currentArr);
           if (!swapped) return;
           cleanup();
           tryInit();
         } finally {
-          if (hideGlobalPicker) delete document.documentElement.dataset.korailStationSwap;
           delete button.dataset.swapBusy;
           syncStationSwapButton();
         }
@@ -366,14 +370,21 @@ waitForL(() => {
     syncStationSwapBlockedState();
   }
 
-function isGlobalTrainRow(el) {
+function hasGlobalTrainRouteAndTime(el) {
   const text = (el?.textContent || "").replace(/\s+/g, " ");
-  const hasRouteAndTime = text.includes("→") && (text.match(/\b\d{1,2}:\d{2}\b/g) || []).length >= 2;
-  return hasRouteAndTime && ![...el.children].some((child) => isGlobalTrainRow(child));
+  return text.includes("→") && (text.match(/\b\d{1,2}:\d{2}\b/g) || []).length >= 2;
+}
+
+function isGlobalTrainRow(el) {
+  return hasGlobalTrainRouteAndTime(el)
+    && ![...el.children].some((child) => isGlobalTrainRow(child));
 }
 
 function getGlobalTrainRows(root = document) {
   if (!location.pathname.includes("/global/")) return [];
+  const ticketRows = [...root.querySelectorAll(".tckList")]
+    .filter(hasGlobalTrainRouteAndTime);
+  if (ticketRows.length) return ticketRows;
   return [...root.querySelectorAll("li, tr, div")].filter(isGlobalTrainRow);
 }
 
@@ -396,6 +407,10 @@ function isDomesticTrainSearchResultsPage() {
     || path === "/ticket/search/list/discount";
 }
 
+function isTrainFareResultsPage() {
+  return isDomesticTrainSearchResultsPage() || isGlobalTicketPage();
+}
+
 function getTrainTable() {
   const domesticTable = isDomesticTrainSearchResultsPage()
     ? document.querySelector(".tckWrap")
@@ -414,6 +429,58 @@ function isStationSwapMainPage() {
   const path = location.pathname.replace(/\/+$/, "");
   return path === "/ticket/main"
     || /\/global\/(eng|jpn|chn|tw|vi|th|id)\/main$/i.test(path);
+}
+
+function scheduleLoadedTrainFares(trainTable) {
+  if (!isGlobalTicketPage()) {
+    refreshLoadedTransferFares(trainTable);
+    return;
+  }
+  if (!trainTable || !selectedTrainRow?.isConnected || !trainTable.contains(selectedTrainRow)) return;
+  if (trainFareStartFrame !== null) return;
+  const start = () => {
+    const remainingDelay = trainFarePauseUntil - Date.now();
+    if (remainingDelay > 0) {
+      trainFareStartFrame = setTimeout(waitForQuietWindow, remainingDelay);
+      return;
+    }
+    trainFareStartFrame = null;
+    const liveTable = trainTable.isConnected ? trainTable : getTrainTable();
+    if (liveTable) refreshLoadedTransferFares(liveTable);
+  };
+  const waitForQuietWindow = () => {
+    const remainingDelay = trainFarePauseUntil - Date.now();
+    if (remainingDelay > 0) {
+      trainFareStartFrame = setTimeout(waitForQuietWindow, remainingDelay);
+      return;
+    }
+    trainFareStartFrame = typeof requestIdleCallback === "function"
+      ? requestIdleCallback(start, { timeout: 1200 })
+      : requestAnimationFrame(() => setTimeout(start, 0));
+  };
+  waitForQuietWindow();
+}
+
+function waitForGlobalTrainFareIdle() {
+  const delay = trainFarePauseUntil - Date.now();
+  return delay > 0
+    ? new Promise((resolve) => setTimeout(resolve, delay))
+    : Promise.resolve();
+}
+
+function pauseGlobalTrainFareLookups() {
+  if (!isGlobalTicketPage() || !isTrainFareResultsPage()) return;
+  trainFarePauseUntil = Date.now() + GLOBAL_TRAIN_FARE_INTERACTION_PAUSE_MS;
+  if (activeTrainFareRequest) {
+    activeTrainFareRequest.interrupted = true;
+    activeTrainFareRequest.controller.abort();
+  }
+  clearTimeout(trainFareResumeTimer);
+  trainFareResumeTimer = setTimeout(() => {
+    trainFareResumeTimer = null;
+    const trainTable = getTrainTable();
+    if (trainTable) scheduleLoadedTrainFares(trainTable);
+  }, GLOBAL_TRAIN_FARE_INTERACTION_PAUSE_MS);
 }
 
 const TRAIN_TIME_LABELS = [
@@ -471,13 +538,13 @@ function isTrainFareButton(el) {
   cleanupHomeNearestPanel();
 
   if (!dep || !arr) return;
-  refreshLoadedTransferFares(trainTable);
   const existingPanel = document.getElementById("korail-map-panel");
   if (existingPanel) {
     const segmentChanged = existingPanel.dataset.korailDep !== dep
       || existingPanel.dataset.korailArr !== arr;
     if (!segmentChanged) {
       bindTrainRowClick(dep, arr);
+      scheduleLoadedTrainFares(trainTable);
       return;
     }
 
@@ -508,17 +575,32 @@ function isTrainFareButton(el) {
   if (routeStations.length > 0) {
     injectMapPanel(dep, arr, routeStations, fullRoute);
   }
+  scheduleLoadedTrainFares(trainTable);
 }
 
 function isExtensionMapMutation(record) {
   const target = record?.target?.nodeType === 1
     ? record.target
     : record?.target?.parentElement;
-  return !!target?.closest?.("#korail-map-panel, #korail-station-map-popup, .leaflet-container");
+  return !!target?.closest?.(
+    "#korail-map-panel, #korail-station-map-popup, .leaflet-container, "
+      + ".price_box[data-korail-fare-key]",
+  );
 }
 
 let tryInitTimer = null;
 let spaObserverFrame = null;
+function scheduleTryInit() {
+  const isGlobal = isGlobalTicketPage();
+  if (isGlobal && tryInitTimer !== null) return;
+  if (!isGlobal) clearTimeout(tryInitTimer);
+  tryInitTimer = setTimeout(() => {
+    tryInitTimer = null;
+    tryInit();
+    updateNearestDisabledState();
+  }, isGlobal ? 50 : 300);
+}
+
 const spaObserver = new MutationObserver((records) => {
   const hasRelevantMutation = records.some((record) => !isExtensionMapMutation(record));
   if (!hasRelevantMutation) return;
@@ -528,11 +610,7 @@ const spaObserver = new MutationObserver((records) => {
       syncStationSwapBlockedState();
     });
   }
-  clearTimeout(tryInitTimer);
-  tryInitTimer = setTimeout(() => {
-    tryInit();
-    updateNearestDisabledState();
-  }, 300);
+  scheduleTryInit();
 });
 spaObserver.observe(document.body, {
   childList: true,
@@ -540,6 +618,11 @@ spaObserver.observe(document.body, {
   attributes: true,
   attributeFilter: ["class", "style", "aria-hidden", "hidden"],
 });
+document.addEventListener("pointerdown", (event) => {
+  if (!isGlobalTicketPage()
+    || !event.target?.closest?.(".tckList a, .tckList button")) return;
+  pauseGlobalTrainFareLookups();
+}, true);
   window.addEventListener("resize", () => {
   if (isLoginPage()) {
     cleanupHomeNearestPanel();
@@ -645,6 +728,20 @@ function findConfirmedSelectedTrainRow(trainTable) {
   return activeBoxes.at(-1)?.closest(".tckList") || null;
 }
 
+function scheduleGlobalTrainMapSelection(clickedRow) {
+  const selectionVersion = ++globalTrainMapSelectionVersion;
+  const update = () => {
+    if (selectionVersion !== globalTrainMapSelectionVersion) return;
+    if (!clickedRow.isConnected || !getTrainTable()?.contains(clickedRow)) return;
+    selectTrainRowForMap(clickedRow, currentBookingDep, currentBookingArr);
+  };
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(update, { timeout: 1000 });
+  } else {
+    setTimeout(update, 50);
+  }
+}
+
 function bindTrainRowClick(dep, arr) {
   if (currentBookingDep && currentBookingArr
     && (dep !== currentBookingDep || arr !== currentBookingArr)) {
@@ -672,25 +769,22 @@ function bindTrainRowClick(dep, arr) {
       const isGlobal = isGlobalTicketPage();
       const seatIndex = isGlobal ? -1 : getClickedTrainSeatIndex(clickedRow, event.target);
       if (!isGlobal && seatIndex < 0) return;
+      if (isGlobal) {
+        pauseGlobalTrainFareLookups();
+        scheduleGlobalTrainMapSelection(clickedRow);
+        return;
+      }
       const clickedRowKey = getTrainRowKey(clickedRow);
-      const previousSelectionSignature = isGlobal
-        ? ""
-        : getTrainSeatSelectionSignature(getConnectedTrainRows(clickedRow));
+      const previousSelectionSignature = getTrainSeatSelectionSignature(getConnectedTrainRows(clickedRow));
 
       // 코레일의 행 선택 이벤트가 모두 끝난 다음 지도만 갱신합니다.
       setTimeout(() => {
         const liveTable = getTrainTable();
-        const liveRows = isGlobal
-          ? getGlobalTrainRows(liveTable)
-          : [...(liveTable?.querySelectorAll(".tckList") || [])];
+        const liveRows = [...(liveTable?.querySelectorAll(".tckList") || [])];
         const currentRow = clickedRow.isConnected && liveTable?.contains(clickedRow)
           ? clickedRow
           : liveRows.find((row) => getTrainRowKey(row) === clickedRowKey);
         if (!currentRow || !liveTable?.contains(currentRow)) return;
-        if (isGlobal) {
-          selectTrainRowForMap(currentRow, currentBookingDep, currentBookingArr);
-          return;
-        }
 
         const confirmedRows = getConnectedTrainRows(currentRow);
         const confirmedSelectionSignature = getTrainSeatSelectionSignature(confirmedRows);
@@ -801,6 +895,7 @@ function selectTrainRowForMap(clickedRow, dep, arr, confirmedSegmentIndexes = nu
       activeSegmentIndexes,
     );
   }
+  if (isGlobalTicketPage()) scheduleLoadedTrainFares(getTrainTable());
 }
 
 // 문장 안에서 역명을 찾아 반환합니다.
@@ -870,6 +965,15 @@ function getTrainRowKey(row) {
   ].join(":");
 }
 
+function getSharedTransferStationName(left, right) {
+  if (!left || !right) return "";
+  if (left === right) return left;
+  return (left === "아산" && right === "천안아산")
+    || (left === "천안아산" && right === "아산")
+    ? "천안아산"
+    : "";
+}
+
 // 환승으로 이어진 열차 행 묶음을 찾습니다.
 
 function getConnectedTrainRows(clickedRow) {
@@ -888,13 +992,19 @@ function getConnectedTrainRows(clickedRow) {
     start > 0 &&
     segments[start - 1].segment &&
     segments[start].segment &&
-    segments[start - 1].segment.arr === segments[start].segment.dep
+    getSharedTransferStationName(
+      segments[start - 1].segment.arr,
+      segments[start].segment.dep,
+    )
   ) start--;
   while (
     end + 1 < segments.length &&
     segments[end].segment &&
     segments[end + 1].segment &&
-    segments[end].segment.arr === segments[end + 1].segment.dep
+    getSharedTransferStationName(
+      segments[end].segment.arr,
+      segments[end + 1].segment.dep,
+    )
   ) end++;
 
   return segments.slice(start, end + 1).map((item) => ({ ...item, segmentIndex: 0 }));
@@ -1460,6 +1570,8 @@ function collectTrainFareMetadataFromReact(row) {
 }
 
 function getTrainFareMetadata(row, segmentIndex = 0) {
+  const cachedBySegment = trainFareMetadataCache.get(row);
+  if (cachedBySegment?.has(segmentIndex)) return cachedBySegment.get(segmentIndex);
   const metadata = collectTrainFareMetadataFromReact(row);
   const displayedNumbers = getDisplayedTrainNumbers(row);
   let trainNo = displayedNumbers[segmentIndex] || displayedNumbers[0] || "";
@@ -1478,7 +1590,11 @@ function getTrainFareMetadata(row, segmentIndex = 0) {
   }) || matchingMetadata.find((item) => item.runDate) || matchingMetadata[0] || null;
   const runDate = selected?.runDate || getDisplayedTrainRunDate(row, matchingMetadata);
   if (!selected || !/^\d{8}$/.test(runDate)) return null;
-  return { ...selected, runDate, trainNo };
+  const result = { ...selected, runDate, trainNo };
+  const nextCache = cachedBySegment || new Map();
+  nextCache.set(segmentIndex, result);
+  if (!cachedBySegment) trainFareMetadataCache.set(row, nextCache);
+  return result;
 }
 
 function normalizeTrainFareEntries(entries) {
@@ -1511,12 +1627,17 @@ function requestTrainFare(metadata) {
   const cacheKey = getTrainFareCacheKey(metadata);
   if (trainFareCache.has(cacheKey)) return trainFareCache.get(cacheKey);
 
+  let retryAfterInteraction = false;
   const request = trainFareQueue.then(async () => {
+    if (trainFareLookupsBlocked) return null;
+    await waitForGlobalTrainFareIdle();
     if (trainFareLookupsBlocked) return null;
     const remainingDelay = 250 - (Date.now() - lastTrainFareRequestAt);
     if (remainingDelay > 0) {
       await new Promise((resolve) => setTimeout(resolve, remainingDelay));
     }
+    await waitForGlobalTrainFareIdle();
+    if (trainFareLookupsBlocked) return null;
     lastTrainFareRequestAt = Date.now();
 
     const formData = new FormData();
@@ -1531,6 +1652,8 @@ function requestTrainFare(metadata) {
     formData.append("Version", "999999999");
 
     const controller = new AbortController();
+    const activeRequest = { controller, interrupted: false };
+    activeTrainFareRequest = activeRequest;
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
       const response = await fetch("/classes/com.korail.mobile.trn.prcFare.do", {
@@ -1552,15 +1675,25 @@ function requestTrainFare(metadata) {
       const fares = normalizeTrainFareEntries(data?.prcList);
       return Object.keys(fares).length ? fares : null;
     } catch (error) {
+      if (activeRequest.interrupted) {
+        retryAfterInteraction = true;
+        return null;
+      }
       trainFareLookupsBlocked = true;
       console.warn("[Korail Map] Automatic fare lookup stopped; keeping the original result layout:", error);
       return null;
     } finally {
       clearTimeout(timer);
+      if (activeTrainFareRequest === activeRequest) activeTrainFareRequest = null;
     }
   });
   trainFareQueue = request.then(() => undefined);
   trainFareCache.set(cacheKey, request);
+  request.then(() => {
+    if (retryAfterInteraction && trainFareCache.get(cacheKey) === request) {
+      trainFareCache.delete(cacheKey);
+    }
+  });
   return request;
 }
 
@@ -1581,6 +1714,41 @@ function getLoadedTransferFareItems(trainTable) {
   return items;
 }
 
+function getLoadedGlobalFareItems(trainTable) {
+  const rows = [];
+  const handledRows = new Set();
+  getGlobalTrainRows(trainTable).forEach((routeRow) => {
+    let fareRow = routeRow;
+    while (
+      fareRow?.parentElement
+      && fareRow !== trainTable
+      && !fareRow.querySelector?.(".price_box")
+    ) fareRow = fareRow.parentElement;
+    if (!fareRow?.querySelector?.(".price_box")) fareRow = routeRow;
+    if (handledRows.has(fareRow)) return;
+    handledRows.add(fareRow);
+
+    const segments = getTrainRowSegments(fareRow);
+    (segments.length ? segments : [null]).forEach((segment, segmentIndex) => {
+      rows.push({ row: fareRow, segment, segmentIndex });
+    });
+  });
+  return rows;
+}
+
+function getSelectedGlobalFareItems(trainTable) {
+  if (!selectedTrainRow?.isConnected || !trainTable.contains(selectedTrainRow)) return [];
+  return getConnectedTrainRows(selectedTrainRow)
+    .filter((item, index) => selectedTransferSegmentIndexes.has(index)
+      && trainTable.contains(item.row));
+}
+
+function getLoadedTrainFareItems(trainTable) {
+  return isGlobalTicketPage()
+    ? getSelectedGlobalFareItems(trainTable)
+    : getLoadedTransferFareItems(trainTable);
+}
+
 function getTrainFareSegmentBoxes(item) {
   const boxes = [...item.row.querySelectorAll(".price_box")];
   const segments = getTrainRowSegments(item.row);
@@ -1597,7 +1765,80 @@ function isSoldOutTrainFareBox(box) {
   return /매진(?!\s*임박)|sold\s*out(?!\s*soon)/i.test(String(box.textContent || ""));
 }
 
+function isStandingTrainFareBox(box) {
+  return box.classList.contains("standing_seat")
+    || /입석|standing/i.test(String(box.textContent || ""));
+}
+
+function roundKorailTrainFare(amount) {
+  const lowerHundred = Math.floor(amount / 100) * 100;
+  return amount - lowerHundred > 50 ? lowerHundred + 100 : lowerHundred;
+}
+
+function calculateDiscountedTrainFare(amount, discountPercent) {
+  const originalFare = Number(String(amount || "").replace(/\D/g, ""));
+  if (!Number.isFinite(originalFare) || originalFare <= 0) return amount;
+  const discountedFare = roundKorailTrainFare(
+    originalFare * ((100 - discountPercent) / 100),
+  );
+  return String(discountedFare).replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "원";
+}
+
+function calculateStandingTrainFare(amount) {
+  return calculateDiscountedTrainFare(amount, 15);
+}
+
+function calculateTransferTrainFare(amount, isStanding) {
+  const standingFare = isStanding ? calculateStandingTrainFare(amount) : amount;
+  return calculateDiscountedTrainFare(standingFare, 30);
+}
+
+function getTrainFareItemCategory(item) {
+  const row = item?.row;
+  if (!row) return "";
+  const descriptors = [row.innerText, row.textContent];
+  if (row.querySelectorAll) {
+    [...row.querySelectorAll("img, [aria-label], [title]")].forEach((element) => {
+      descriptors.push(
+        element.getAttribute?.("alt"),
+        element.getAttribute?.("aria-label"),
+        element.getAttribute?.("title"),
+        element.getAttribute?.("src"),
+      );
+    });
+  }
+  const text = descriptors.filter(Boolean).join(" ");
+  if (/\bKTX(?:[-\s]?(?:산천|이음|청룡))?/i.test(text)) return "ktx";
+  if (/ITX[-\s]?(?:마음|새마을|청춘|Maum|Saemaeul|Cheongchun)|새마을|무궁화|누리로|Saemaeul|Mugunghwa|Nuriro/i.test(text)) {
+    return "general";
+  }
+  return "";
+}
+
+function isGeneralTrainInKtxTransfer(item) {
+  if (getTrainFareItemCategory(item) !== "general") return false;
+  return getConnectedTrainRows(item.row)
+    .some((connectedItem) => getTrainFareItemCategory(connectedItem) === "ktx");
+}
+
+function findGlobalTrainFareSelection(anchor) {
+  if (!isGlobalTicketPage()) return null;
+  return [...anchor.querySelectorAll("p, span, strong, em")]
+    .find((element) => /^(Select|選択|选择|選擇|Chọn|เลือก|Pilih)$/i.test(
+      String(element.textContent || "").trim(),
+    )) || null;
+}
+
+function formatTrainFareAmount(amount) {
+  if (!isGlobalTicketPage()) return amount;
+  const digits = String(amount || "").replace(/\D/g, "");
+  return digits
+    ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " KRW"
+    : amount;
+}
+
 function renderTrainFareBoxes(item, fares, fareKey) {
+  const hasTransferDiscount = isGeneralTrainInKtxTransfer(item);
   getTrainFareSegmentBoxes(item).slice(0, 2).forEach((box, index) => {
     if (isSoldOutTrainFareBox(box)) return;
     const anchor = box.querySelector("a");
@@ -1608,12 +1849,18 @@ function renderTrainFareBoxes(item, fares, fareKey) {
       : index === 1 ? "special" : "general";
     const amount = fares?.[fareType];
     if (!amount) return;
+    const isStanding = isStandingTrainFareBox(box);
+    const displayAmount = hasTransferDiscount && fareType === "general"
+      ? calculateTransferTrainFare(amount, isStanding)
+      : isStanding ? calculateStandingTrainFare(amount) : amount;
 
     let label = anchor.querySelector(".txt_ch");
     if (!label) {
       label = document.createElement("p");
       label.className = "txt_ch";
-      label.textContent = fareType === "special" ? "특실" : "일반실";
+      label.textContent = isGlobalTicketPage()
+        ? (fareType === "special" ? "First class" : "Economy class")
+        : (fareType === "special" ? "특실" : "일반실");
       anchor.prepend(label);
     }
     let price = anchor.querySelector(".txt_price");
@@ -1622,11 +1869,15 @@ function renderTrainFareBoxes(item, fares, fareKey) {
       price?.textContent,
     ].find((text) => /적립/.test(text || "")) || "";
     if (!price) {
+      price = findGlobalTrainFareSelection(anchor);
+      price?.classList.add("txt_price", "txt_bk");
+    }
+    if (!price) {
       price = document.createElement("p");
       price.className = "txt_price txt_bk";
       label.after(price);
     }
-    price.textContent = amount;
+    price.textContent = formatTrainFareAmount(displayAmount);
     if (rewardText) {
       let reward = anchor.querySelector(".txt_gr");
       if (!reward) {
@@ -1641,7 +1892,10 @@ function renderTrainFareBoxes(item, fares, fareKey) {
 }
 
 function refreshLoadedTransferFares(trainTable) {
-  if (!isDomesticTrainSearchResultsPage() || !trainTable || trainFareLookupsBlocked) return;
+  if (!isTrainFareResultsPage()
+    || !trainTable
+    || trainFareLookupsBlocked
+    || (isGlobalTicketPage() && trainFarePauseUntil > Date.now())) return;
   trainFareRefreshRequested = true;
   if (trainFareRefreshRunning) return;
   trainFareRefreshRunning = true;
@@ -1650,9 +1904,11 @@ function refreshLoadedTransferFares(trainTable) {
     let currentTable = trainTable;
     do {
       trainFareRefreshRequested = false;
-      const items = getLoadedTransferFareItems(currentTable);
+      const items = getLoadedTrainFareItems(currentTable);
       for (const item of items) {
-        if (trainFareLookupsBlocked || !item.row.isConnected) break;
+        if (trainFareLookupsBlocked
+          || (isGlobalTicketPage() && trainFarePauseUntil > Date.now())
+          || !item.row.isConnected) break;
         const metadata = getTrainFareMetadata(item.row, item.segmentIndex || 0);
         if (!metadata) continue;
         const fareKey = getTrainFareCacheKey(metadata);
@@ -1667,7 +1923,7 @@ function refreshLoadedTransferFares(trainTable) {
       currentTable = getTrainTable();
     } while (trainFareRefreshRequested
       && currentTable
-      && isDomesticTrainSearchResultsPage()
+      && isTrainFareResultsPage()
       && !trainFareLookupsBlocked);
   })().finally(() => {
     trainFareRefreshRunning = false;
@@ -1875,8 +2131,15 @@ function drawTrainStations(dep, arr, stationGroups) {
   const boundsCoords = [];
 
   stationGroups.forEach((group) => {
-    const rawFullStations = group.fullStations || [];
-    const rawActiveStations = group.activeStations || [];
+    const transferStations = group.transferStations || [];
+    const rawFullStations = normalizeTransferStationNames(
+      group.fullStations || [],
+      transferStations,
+    );
+    const rawActiveStations = normalizeTransferStationNames(
+      group.activeStations || [],
+      transferStations,
+    );
     const fullStations = rawFullStations
       .filter(name => STATIONS[name])
       .map(name => ({ name, ...STATIONS[name] }));
@@ -1890,7 +2153,7 @@ function drawTrainStations(dep, arr, stationGroups) {
 
     if (fullStations.length < 2) return;
 
-    (group.transferStations || []).forEach((name) => {
+    transferStations.forEach((name) => {
       if (name) transferMarkerNames.add(name);
     });
 
@@ -2055,11 +2318,23 @@ function getTransferStationNames(segments) {
   for (let i = 0; i < segments.length - 1; i++) {
     const currentArr = segments[i]?.arr;
     const nextDep = segments[i + 1]?.dep;
-    if (currentArr && currentArr === nextDep && !transferStations.includes(currentArr)) {
-      transferStations.push(currentArr);
+    const sharedStation = getSharedTransferStationName(currentArr, nextDep);
+    if (sharedStation && !transferStations.includes(sharedStation)) {
+      transferStations.push(sharedStation);
     }
   }
   return transferStations;
+}
+
+function normalizeTransferStationNames(stationNames, transferStations) {
+  const normalized = [];
+  (stationNames || []).forEach((name) => {
+    const sharedStation = (transferStations || [])
+      .find((transferStation) => getSharedTransferStationName(name, transferStation));
+    const displayName = sharedStation || name;
+    if (normalized.at(-1) !== displayName) normalized.push(displayName);
+  });
+  return normalized;
 }
 
 // 텍스트에서 출발→도착 구간을 파싱합니다.

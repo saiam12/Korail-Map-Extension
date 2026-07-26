@@ -206,9 +206,9 @@ function initStationMap(container, popup, currentDep, currentArr) {
       .bindTooltip(korailDisplayStationName(name), { permanent: false, direction: "top" })
       .on("click", () => {
         const activeTab = popup.querySelector(".tabPage.active") || popup;
-        activeTab.querySelectorAll("a, button").forEach((a) => {
-          if (korailStationKey(a.textContent.trim()) === name) a.click();
-        });
+        const option = [...activeTab.querySelectorAll("a, button")]
+          .find((a) => korailStationKey(a.textContent.trim()) === name && isVisibleElement(a));
+        option?.click();
       });
   });
 

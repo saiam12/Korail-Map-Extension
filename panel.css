@@ -778,11 +778,6 @@
   to { transform: rotate(360deg); }
 }
 
-html[data-korail-station-swap="true"] .layerWrap.type_tranin-station-pop_wrap {
-  visibility: hidden !important;
-  pointer-events: none !important;
-}
-
 #korail-station-swap-btn {
   position: fixed;
   z-index: 9998;
