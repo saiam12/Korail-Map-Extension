@@ -165,6 +165,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
   const stationRenderer = L.canvas({ padding: 0.5 });
   const stationMarkerBorderWeight = 1.5;
   const stationMarkerRadius = (isMajor) => ((isMajor ? 11 : 9) - stationMarkerBorderWeight) / 2;
+  const stationHoverRadius = (isMajor) => isMajor ? 6 : 5.5;
 
   // 모든 역 마커 생성 (초기엔 지도에 추가 안 함)
   const markers = {};
@@ -276,8 +277,9 @@ function initStationMap(container, popup, currentDep, currentArr) {
     const marker = markers[name];
     if (typeof marker?.setStyle === "function" && typeof marker?.setRadius === "function") {
       const baseRadius = stationMarkerRadius(STATIONS[name]?.major === true);
+      const hoverRadius = stationHoverRadius(STATIONS[name]?.major === true);
       marker.setStyle({ fillColor: on ? "#183D78" : "#888888" });
-      marker.setRadius(on ? 6 : baseRadius);
+      marker.setRadius(on ? hoverRadius : baseRadius);
       return;
     }
 
@@ -308,7 +310,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
 
     hoverMarker = L.circleMarker([coords.lat, coords.lng], {
       pane: "korailStationHoverPane",
-      radius: 6,
+      radius: stationHoverRadius(STATIONS[name].major === true),
       color: "#ffffff",
       weight: 3,
       fillColor: "#183D78",

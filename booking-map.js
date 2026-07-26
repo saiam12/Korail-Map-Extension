@@ -19,9 +19,17 @@ waitForL(() => {
   var currentBookingDep = "";
   var currentBookingArr = "";
   var userTrainTimeReadVersion = 0;
+  var userTrainFareReadVersion = 0;
   var userTrainTimeClickBound = false;
+  var userTrainFareClickBound = false;
   var trainRowClickBound = false;
   const trainScheduleCache = new Map();
+  const trainFareCache = new Map();
+  let trainFareQueue = Promise.resolve();
+  let lastTrainFareRequestAt = 0;
+  let trainFareLookupsBlocked = false;
+  let trainFareRefreshRunning = false;
+  let trainFareRefreshRequested = false;
   const isTrainTimeAutomationEnabled = () => true;
 
   function getStationFields(type) {
@@ -412,11 +420,20 @@ const TRAIN_TIME_LABELS = [
   "열차시각", "Train Time", "Time", "列車時刻", "列车时刻", "時刻",
   "Giờ tàu", "Giờ khởi hành", "ตารางเวลา", "เวลาเดินรถ", "Jadwal Kereta", "Waktu Kereta",
 ];
+const TRAIN_FARE_LABELS = ["운임요금", "Train Fare", "Fare"];
 // const randomNumber = Math.floor(Math.random() * 101) + 100;
 
 function isTrainTimeButton(el) {
   const text = (el?.textContent || el?.getAttribute?.("aria-label") || "").trim().toLocaleLowerCase();
   return TRAIN_TIME_LABELS.some((label) => text.includes(label.toLocaleLowerCase()));
+}
+
+function isTrainFareButton(el) {
+  const text = (el?.textContent || el?.getAttribute?.("aria-label") || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+  return TRAIN_FARE_LABELS.some((label) => text.includes(label.toLocaleLowerCase()));
 }
 
 // 현재 페이지 상태에 맞춰 홈 패널 또는 예매 지도 패널을 초기화합니다.
@@ -454,6 +471,7 @@ function isTrainTimeButton(el) {
   cleanupHomeNearestPanel();
 
   if (!dep || !arr) return;
+  refreshLoadedTransferFares(trainTable);
   const existingPanel = document.getElementById("korail-map-panel");
   if (existingPanel) {
     const segmentChanged = existingPanel.dataset.korailDep !== dep
@@ -469,6 +487,7 @@ function isTrainTimeButton(el) {
     selectedTransferRouteKey = "";
     selectedTransferSegmentIndexes = new Set();
     userTrainTimeReadVersion += 1;
+    userTrainFareReadVersion += 1;
     cleanup();
   }
 
@@ -701,7 +720,22 @@ function bindTrainRowClick(dep, arr) {
       setTimeout(() => {
         updateTrainStationsFromUserTimeModal(buttonIndex, selectedTrainRowVersion, readVersion);
       }, 0);
-    });
+    }, true);
+  }
+
+  if (!userTrainFareClickBound) {
+    userTrainFareClickBound = true;
+    document.addEventListener("click", (event) => {
+      const control = event.target.closest("a, button");
+      if (!control || !isTrainFareButton(control) || control.closest(".ReactModal__Content, .layerPopup")) return;
+
+      const fareButtons = findBottomTrainFareButtons();
+      const trainTable = getTrainTable();
+      if (!fareButtons.includes(control) && !trainTable?.contains(control)) return;
+
+      const readVersion = ++userTrainFareReadVersion;
+      setTimeout(() => updateTrainFareFromUserModal(readVersion), 0);
+    }, true);
   }
 
   setTimeout(() => {
@@ -1009,6 +1043,84 @@ function waitUserOpenedTrainTimeStations(readVersion) {
   });
 }
 
+function extractTrainFareTotalsFromRows(rows) {
+  const entries = [];
+  let seatName = "";
+  (Array.isArray(rows) ? rows : []).forEach((cells) => {
+    const normalizedCells = (Array.isArray(cells) ? cells : [])
+      .map((cell) => String(cell || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    const seatCell = normalizedCells.find((cell) => (
+      /일반실|economy|general/i.test(cell) || /특실|우등|first|special/i.test(cell)
+    ));
+    if (seatCell) {
+      seatName = /특실|우등|first|special/i.test(seatCell) ? "특실" : "일반실";
+    }
+    const totalIndex = normalizedCells.findIndex((cell) => /^(합계|sum|total)$/i.test(cell));
+    if (seatName && totalIndex >= 0) {
+      entries.push({
+        psrmClNm: seatName,
+        sumAmt: normalizedCells[totalIndex + 1] || normalizedCells.at(-1) || "",
+      });
+    }
+  });
+  return normalizeTrainFareEntries(entries);
+}
+
+function extractTrainFareFromModal(modal) {
+  if (!modal) return null;
+  const rows = [...modal.querySelectorAll("table tr")]
+    .map((row) => [...row.querySelectorAll("th, td")].map((cell) => cell.textContent || ""));
+  const fares = extractTrainFareTotalsFromRows(rows);
+  if (!Object.keys(fares).length) return null;
+  const trainNumbers = getDisplayedTrainNumbers({
+    innerText: modal.innerText || modal.textContent || "",
+    textContent: modal.textContent || "",
+  });
+  return {
+    fares,
+    segment: extractSegmentFromTimeModal(modal),
+    trainNo: trainNumbers.at(-1) || trainNumbers[0] || "",
+  };
+}
+
+function waitUserOpenedTrainFare(readVersion) {
+  return new Promise((resolve) => {
+    const readModal = () => {
+      const modal = [...document.querySelectorAll(".ReactModal__Content, .layerPopup, .layerWrap")]
+        .find((element) => {
+          const text = String(element.textContent || "");
+          return element.querySelector("table")
+            && /운임요금|Train Fare/i.test(text)
+            && isVisibleElement(element);
+        });
+      return modal ? extractTrainFareFromModal(modal) : null;
+    };
+
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      observer.disconnect();
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(null), 6000);
+    const observer = new MutationObserver(() => {
+      if (readVersion !== userTrainFareReadVersion) {
+        finish(null);
+        return;
+      }
+      const fare = readModal();
+      if (fare) finish(fare);
+    });
+    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+
+    const immediate = readModal();
+    if (immediate) finish(immediate);
+  });
+}
+
 // 전체 정차역 목록에서 선택 구간만 잘라냅니다.
 
 function sliceTrainStations(stationNames, dep, arr, side = "auto") {
@@ -1187,22 +1299,13 @@ function normalizeTrainScheduleMetadata(value) {
   };
 }
 
-function collectTrainScheduleMetadataFromReact(row) {
-  const results = [];
-  const resultKeys = new Set();
+function scanTrainRowReactValues(row, visitor) {
   const visited = new Set();
 
   const scanProps = (value, depth = 0) => {
     if (!value || typeof value !== "object" || depth > 5 || visited.size >= 500 || visited.has(value)) return;
     visited.add(value);
-    const metadata = normalizeTrainScheduleMetadata(value);
-    if (metadata) {
-      const key = `${metadata.runDate}:${metadata.trainNo}:${metadata.trainGroupCode}`;
-      if (!resultKeys.has(key)) {
-        resultKeys.add(key);
-        results.push(metadata);
-      }
-    }
+    visitor(value);
 
     if (Array.isArray(value)) {
       value.slice(0, 50).forEach((item) => scanProps(item, depth + 1));
@@ -1234,6 +1337,19 @@ function collectTrainScheduleMetadataFromReact(row) {
         }
       });
   }
+}
+
+function collectTrainScheduleMetadataFromReact(row) {
+  const results = [];
+  const resultKeys = new Set();
+  scanTrainRowReactValues(row, (value) => {
+    const metadata = normalizeTrainScheduleMetadata(value);
+    if (!metadata) return;
+    const key = `${metadata.runDate}:${metadata.trainNo}:${metadata.trainGroupCode}`;
+    if (resultKeys.has(key)) return;
+    resultKeys.add(key);
+    results.push(metadata);
+  });
   return results;
 }
 
@@ -1244,7 +1360,7 @@ function getDisplayedTrainNumbers(row) {
     .filter(Boolean);
   const numbers = lines
     .filter((line) => /^\d{1,6}$/.test(line))
-    .concat(lines.flatMap((line) => [...line.matchAll(/(?:KTX|ITX|무궁화|누리로|SRT)[^\d]{0,12}(\d{1,6})/gi)]
+    .concat(lines.flatMap((line) => [...line.matchAll(/(?:KTX|ITX|무궁화|누리로|SRT|S-?train|남도해양열차)[^\d]{0,12}(\d{1,6})/gi)]
       .map((match) => match[1])))
     .map(normalizeTrainNumber)
     .filter(Boolean);
@@ -1288,6 +1404,277 @@ function getTrainScheduleMetadata(row, segmentIndex = 0) {
     trainNo,
     trainGroupCode: selected?.trainGroupCode || "00",
   };
+}
+
+function normalizeTrainFareMetadata(value) {
+  if (!value || typeof value !== "object") return null;
+  const trainNo = normalizeTrainNumber(value.h_trn_no ?? value.trnNo ?? value.txtTrnNo ?? "");
+  const departureStationCode = String(
+    value.h_dpt_rs_stn_cd ?? value.dptRsStnCd ?? value.txtDptRsStnCd ?? "",
+  ).trim();
+  const arrivalStationCode = String(
+    value.h_arv_rs_stn_cd ?? value.arvRsStnCd ?? value.txtArvRsStnCd ?? "",
+  ).trim();
+  if (!trainNo
+    || !/^[A-Za-z0-9]{2,10}$/.test(departureStationCode)
+    || !/^[A-Za-z0-9]{2,10}$/.test(arrivalStationCode)) return null;
+
+  const seatAttributeCode = String(
+    value.h_seat_att_cd ?? value.seatAttCd ?? value.rqSeatAttCd ?? value.txtSeatAttCd_4 ?? "015",
+  ).trim();
+  return {
+    runDate: normalizeTrainRunDate(
+      value.h_run_dt ?? value.runDt ?? value.txtRunDt ?? value.h_dpt_dt ?? value.dptDt,
+    ),
+    trainNo,
+    departureStationCode,
+    arrivalStationCode,
+    departureStationName: String(
+      value.h_dpt_rs_stn_nm ?? value.dptRsStnNm ?? value.txtGoStart ?? "",
+    ).trim(),
+    arrivalStationName: String(
+      value.h_arv_rs_stn_nm ?? value.arvRsStnNm ?? value.txtGoEnd ?? "",
+    ).trim(),
+    seatAttributeCode: /^[A-Za-z0-9]{3}$/.test(seatAttributeCode) ? seatAttributeCode : "015",
+  };
+}
+
+function collectTrainFareMetadataFromReact(row) {
+  const results = [];
+  const resultKeys = new Set();
+  scanTrainRowReactValues(row, (value) => {
+    const metadata = normalizeTrainFareMetadata(value);
+    if (!metadata) return;
+    const key = [
+      metadata.runDate,
+      metadata.trainNo,
+      metadata.departureStationCode,
+      metadata.arrivalStationCode,
+      metadata.seatAttributeCode,
+    ].join(":");
+    if (resultKeys.has(key)) return;
+    resultKeys.add(key);
+    results.push(metadata);
+  });
+  return results;
+}
+
+function getTrainFareMetadata(row, segmentIndex = 0) {
+  const metadata = collectTrainFareMetadataFromReact(row);
+  const displayedNumbers = getDisplayedTrainNumbers(row);
+  let trainNo = displayedNumbers[segmentIndex] || displayedNumbers[0] || "";
+  if (!trainNo) {
+    const metadataTrainNumbers = [...new Set(metadata.map((item) => item.trainNo).filter(Boolean))];
+    if (metadataTrainNumbers.length !== 1) return null;
+    [trainNo] = metadataTrainNumbers;
+  }
+
+  const segment = getTrainRowSegments(row)[segmentIndex] || null;
+  const matchingMetadata = metadata.filter((item) => item.trainNo === trainNo);
+  const selected = matchingMetadata.find((item) => {
+    if (!segment || !item.departureStationName || !item.arrivalStationName) return false;
+    return stationKey(item.departureStationName) === segment.dep
+      && stationKey(item.arrivalStationName) === segment.arr;
+  }) || matchingMetadata.find((item) => item.runDate) || matchingMetadata[0] || null;
+  const runDate = selected?.runDate || getDisplayedTrainRunDate(row, matchingMetadata);
+  if (!selected || !/^\d{8}$/.test(runDate)) return null;
+  return { ...selected, runDate, trainNo };
+}
+
+function normalizeTrainFareEntries(entries) {
+  const fares = {};
+  (Array.isArray(entries) ? entries : []).forEach((entry) => {
+    const digits = String(entry?.sumAmt ?? "").replace(/\D/g, "");
+    if (!digits) return;
+    const amount = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "원";
+    const seatName = String(entry?.psrmClNm || "");
+    if (/특실|우등|first|special/i.test(seatName)) {
+      fares.special = amount;
+    } else if (!fares.general) {
+      fares.general = amount;
+    }
+  });
+  return fares;
+}
+
+function getTrainFareCacheKey(metadata) {
+  return [
+    metadata.runDate,
+    metadata.trainNo,
+    metadata.departureStationCode,
+    metadata.arrivalStationCode,
+    metadata.seatAttributeCode,
+  ].join(":");
+}
+
+function requestTrainFare(metadata) {
+  const cacheKey = getTrainFareCacheKey(metadata);
+  if (trainFareCache.has(cacheKey)) return trainFareCache.get(cacheKey);
+
+  const request = trainFareQueue.then(async () => {
+    if (trainFareLookupsBlocked) return null;
+    const remainingDelay = 250 - (Date.now() - lastTrainFareRequestAt);
+    if (remainingDelay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+    }
+    lastTrainFareRequestAt = Date.now();
+
+    const formData = new FormData();
+    formData.append("chtnDvCd", "1");
+    formData.append("menuId", "11");
+    formData.append("dptRsStnCd", metadata.departureStationCode);
+    formData.append("arvRsStnCd", metadata.arrivalStationCode);
+    formData.append("runDt", metadata.runDate);
+    formData.append("trnNo", metadata.trainNo.padStart(5, "0"));
+    formData.append("rqSeatAttCd", metadata.seatAttributeCode);
+    formData.append("Device", "BH");
+    formData.append("Version", "999999999");
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch("/classes/com.korail.mobile.trn.prcFare.do", {
+        method: "POST",
+        body: formData,
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const data = await response.json();
+      if (data?.errCode === "macro_err1") {
+        trainFareLookupsBlocked = true;
+        return null;
+      }
+      if (!response.ok) {
+        if (response.status === 403 || response.status === 429) trainFareLookupsBlocked = true;
+        return null;
+      }
+      const fares = normalizeTrainFareEntries(data?.prcList);
+      return Object.keys(fares).length ? fares : null;
+    } catch (error) {
+      trainFareLookupsBlocked = true;
+      console.warn("[Korail Map] Automatic fare lookup stopped; keeping the original result layout:", error);
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+  trainFareQueue = request.then(() => undefined);
+  trainFareCache.set(cacheKey, request);
+  return request;
+}
+
+function getLoadedTransferFareItems(trainTable) {
+  const rows = [...trainTable.querySelectorAll(".tckList")];
+  const handledRows = new Set();
+  const items = [];
+  rows.forEach((row) => {
+    if (handledRows.has(row)) return;
+    const connected = getConnectedTrainRows(row)
+      .filter((item) => trainTable.contains(item.row));
+    if (connected.length < 2) return;
+    connected.forEach((item) => {
+      handledRows.add(item.row);
+      items.push(item);
+    });
+  });
+  return items;
+}
+
+function getTrainFareSegmentBoxes(item) {
+  const boxes = [...item.row.querySelectorAll(".price_box")];
+  const segments = getTrainRowSegments(item.row);
+  if (segments.length <= 1) return boxes;
+  const boxesPerSegment = Math.floor(boxes.length / segments.length);
+  if (boxesPerSegment < 1) return [];
+  const start = (item.segmentIndex || 0) * boxesPerSegment;
+  return boxes.slice(start, start + boxesPerSegment);
+}
+
+function isSoldOutTrainFareBox(box) {
+  const soldOutClasses = ["sold_out", "sold_out_wait", "sold_out_seat", "yms_sold_out", "lack_seat"];
+  if (soldOutClasses.some((className) => box.classList.contains(className))) return true;
+  return /매진(?!\s*임박)|sold\s*out(?!\s*soon)/i.test(String(box.textContent || ""));
+}
+
+function renderTrainFareBoxes(item, fares, fareKey) {
+  getTrainFareSegmentBoxes(item).slice(0, 2).forEach((box, index) => {
+    if (isSoldOutTrainFareBox(box)) return;
+    const anchor = box.querySelector("a");
+    if (!anchor) return;
+    const seatLabel = anchor.querySelector(".txt_ch")?.textContent || "";
+    const fareType = /특실|우등|first|special/i.test(seatLabel)
+      ? "special"
+      : index === 1 ? "special" : "general";
+    const amount = fares?.[fareType];
+    if (!amount) return;
+
+    let label = anchor.querySelector(".txt_ch");
+    if (!label) {
+      label = document.createElement("p");
+      label.className = "txt_ch";
+      label.textContent = fareType === "special" ? "특실" : "일반실";
+      anchor.prepend(label);
+    }
+    let price = anchor.querySelector(".txt_price");
+    const rewardText = [
+      anchor.querySelector(".txt_gr")?.textContent,
+      price?.textContent,
+    ].find((text) => /적립/.test(text || "")) || "";
+    if (!price) {
+      price = document.createElement("p");
+      price.className = "txt_price txt_bk";
+      label.after(price);
+    }
+    price.textContent = amount;
+    if (rewardText) {
+      let reward = anchor.querySelector(".txt_gr");
+      if (!reward) {
+        reward = document.createElement("p");
+        reward.className = "txt_gr";
+        anchor.append(reward);
+      }
+      reward.textContent = rewardText.trim();
+    }
+    box.dataset.korailFareKey = fareKey;
+  });
+}
+
+function refreshLoadedTransferFares(trainTable) {
+  if (!isDomesticTrainSearchResultsPage() || !trainTable || trainFareLookupsBlocked) return;
+  trainFareRefreshRequested = true;
+  if (trainFareRefreshRunning) return;
+  trainFareRefreshRunning = true;
+
+  (async () => {
+    let currentTable = trainTable;
+    do {
+      trainFareRefreshRequested = false;
+      const items = getLoadedTransferFareItems(currentTable);
+      for (const item of items) {
+        if (trainFareLookupsBlocked || !item.row.isConnected) break;
+        const metadata = getTrainFareMetadata(item.row, item.segmentIndex || 0);
+        if (!metadata) continue;
+        const fareKey = getTrainFareCacheKey(metadata);
+        const boxes = getTrainFareSegmentBoxes(item);
+        const availableBoxes = boxes.slice(0, 2)
+          .filter((box) => !isSoldOutTrainFareBox(box) && box.querySelector("a"));
+        if (!availableBoxes.length) continue;
+        if (availableBoxes.some((box) => box.dataset.korailFareKey)) continue;
+        const fares = await requestTrainFare(metadata);
+        if (fares && item.row.isConnected) renderTrainFareBoxes(item, fares, fareKey);
+      }
+      currentTable = getTrainTable();
+    } while (trainFareRefreshRequested
+      && currentTable
+      && isDomesticTrainSearchResultsPage()
+      && !trainFareLookupsBlocked);
+  })().finally(() => {
+    trainFareRefreshRunning = false;
+    if (trainFareRefreshRequested && !trainFareLookupsBlocked) {
+      refreshLoadedTransferFares(getTrainTable());
+    }
+  });
 }
 
 function requestTrainSchedule(metadata) {
@@ -1436,6 +1823,35 @@ async function updateTrainStationsFromUserTimeModal(buttonIndex, requestVersion,
     transferStations,
   };
   drawTrainStations(dep, arr, selectedTrainStationGroups);
+}
+
+async function updateTrainFareFromUserModal(readVersion) {
+  const modalFare = await waitUserOpenedTrainFare(readVersion);
+  if (!modalFare
+    || readVersion !== userTrainFareReadVersion
+    || !isDomesticTrainSearchResultsPage()) return;
+
+  const trainTable = getTrainTable();
+  if (!trainTable) return;
+  const items = getLoadedTransferFareItems(trainTable);
+  const matchesSegment = (item) => !modalFare.segment
+    || (item.segment?.dep === modalFare.segment.dep && item.segment?.arr === modalFare.segment.arr);
+  const matchesTrain = (item) => {
+    if (!modalFare.trainNo) return true;
+    const trainNumbers = getDisplayedTrainNumbers(item.row);
+    return (trainNumbers[item.segmentIndex || 0] || trainNumbers[0] || "") === modalFare.trainNo;
+  };
+  const item = items.find((candidate) => matchesSegment(candidate) && matchesTrain(candidate))
+    || items.find(matchesSegment);
+  if (!item?.row?.isConnected) return;
+
+  const fareKey = [
+    "modal",
+    modalFare.trainNo,
+    modalFare.segment?.dep || item.segment?.dep || "",
+    modalFare.segment?.arr || item.segment?.arr || "",
+  ].join(":");
+  renderTrainFareBoxes(item, modalFare.fares, fareKey);
 }
 
 // 정차역 그룹을 지도 위에 회색/파란색 노선으로 그립니다.
@@ -1595,6 +2011,14 @@ function findBottomTrainTimeButton() {
         && isVisibleButton(el);
     })
     .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0] || null;
+}
+
+function findBottomTrainFareButtons() {
+  return [...document.querySelectorAll("a, button")]
+    .filter((el) => isTrainFareButton(el)
+      && !el.closest(".tckWrap")
+      && !el.closest(".ReactModal__Content, .layerPopup")
+      && isVisibleButton(el));
 }
 
 // 하단바 종류를 판별하고 열차시각 버튼 목록을 반환합니다.
