@@ -16,6 +16,8 @@ function korailStationKey(label) {
   ) || key;
 }
 
+const GLOBAL_STATION_SELECTION_ARM_MS = 1000;
+
 function addKorailMapLabelToggle(map, maxZoom) {
   if (window.KORAIL_I18N?.getLocale?.() === "ko") return;
 
@@ -146,6 +148,9 @@ function initStationMap(container, popup, currentDep, currentArr) {
     L.latLng(38.9, 130.0)
   );
   const isGlobalLocale = window.KORAIL_I18N?.getLocale?.() !== "ko";
+  const isGlobalMainPage = isGlobalLocale && /^\/global\/[^/]+\/main\/?$/i.test(location.pathname);
+  const isDomesticBookingPage = /^\/ticket\/search\/list(?:\/discount)?\/?$/i.test(location.pathname);
+  const usesNativeStationClick = (isGlobalLocale && !isGlobalMainPage) || isDomesticBookingPage;
   const map = L.map(container, {
     maxBounds: koreaBounds,
     maxBoundsViscosity: 1.0,
@@ -153,6 +158,16 @@ function initStationMap(container, popup, currentDep, currentArr) {
     zoomSnap: 0.5,
     zoomDelta: 0.5,
   }).setView([36.5, 127.8], 7);
+
+  const globalStationSelectionHint = usesNativeStationClick ? document.createElement("div") : null;
+  if (globalStationSelectionHint) {
+    globalStationSelectionHint.className = "korail-station-map-selection-hint";
+    globalStationSelectionHint.hidden = true;
+    globalStationSelectionHint.textContent = isGlobalLocale
+      ? "Double-click a station point to select it."
+      : "더블클릭하여 선택해 주세요.";
+    container.appendChild(globalStationSelectionHint);
+  }
 
   const hoverPane = map.createPane("korailStationHoverPane");
   hoverPane.style.zIndex = "700";
@@ -172,6 +187,67 @@ function initStationMap(container, popup, currentDep, currentArr) {
   let hoverMarker = null;
   let hoverTrackingEnabled = true;
   let visibleStationNames = new Set();
+  let globalStationSelectionTimer = null;
+  let globalStationSelectionOption = null;
+  let globalStationSelectionName = "";
+  let globalStationSelectionStyle = null;
+  let globalStationSelectionClickHandler = null;
+  let globalStationSelectionPopupZIndex = null;
+  let globalStationSelectionPlaceholder = null;
+
+  function restoreGlobalStationOption(showHint = false) {
+    clearTimeout(globalStationSelectionTimer);
+    globalStationSelectionTimer = null;
+    if (globalStationSelectionOption) {
+      globalStationSelectionOption.removeEventListener("click", globalStationSelectionClickHandler);
+      globalStationSelectionOption.classList.remove("korail-station-map-native-target");
+      if (globalStationSelectionStyle === null) globalStationSelectionOption.removeAttribute("style");
+      else globalStationSelectionOption.setAttribute("style", globalStationSelectionStyle);
+    }
+    if (globalStationSelectionName) highlightIcon(globalStationSelectionName, false);
+    if (globalStationSelectionPopupZIndex !== null) {
+      popup.style.zIndex = globalStationSelectionPopupZIndex;
+      globalStationSelectionPopupZIndex = null;
+    }
+    globalStationSelectionPlaceholder?.remove();
+    globalStationSelectionPlaceholder = null;
+    globalStationSelectionOption = null;
+    globalStationSelectionName = "";
+    globalStationSelectionStyle = null;
+    globalStationSelectionClickHandler = null;
+    if (showHint && globalStationSelectionHint) globalStationSelectionHint.hidden = false;
+  }
+
+  function armGlobalStationOption(option, name, pointerEvent) {
+    restoreGlobalStationOption();
+    if (globalStationSelectionHint) globalStationSelectionHint.hidden = true;
+    globalStationSelectionOption = option;
+    globalStationSelectionName = name;
+    globalStationSelectionStyle = option.getAttribute("style");
+    globalStationSelectionPopupZIndex = popup.style.zIndex;
+    globalStationSelectionPlaceholder = option.cloneNode(true);
+    globalStationSelectionPlaceholder.removeAttribute("href");
+    globalStationSelectionPlaceholder.setAttribute("aria-hidden", "true");
+    globalStationSelectionPlaceholder.tabIndex = -1;
+    globalStationSelectionPlaceholder.classList.add("korail-station-map-placeholder");
+    option.before(globalStationSelectionPlaceholder);
+    popup.style.zIndex = "2147483646";
+    const point = map.latLngToContainerPoint([STATIONS[name].lat, STATIONS[name].lng]);
+    const rect = container.getBoundingClientRect();
+    option.classList.add("korail-station-map-native-target");
+    option.style.left = `${Number.isFinite(pointerEvent?.clientX) ? pointerEvent.clientX : rect.left + point.x}px`;
+    option.style.top = `${Number.isFinite(pointerEvent?.clientY) ? pointerEvent.clientY : rect.top + point.y}px`;
+    globalStationSelectionClickHandler = () => {
+      clearTimeout(globalStationSelectionTimer);
+      globalStationSelectionTimer = setTimeout(() => restoreGlobalStationOption(), 0);
+    };
+    option.addEventListener("click", globalStationSelectionClickHandler, { once: true });
+    globalStationSelectionTimer = setTimeout(
+      () => restoreGlobalStationOption(true),
+      GLOBAL_STATION_SELECTION_ARM_MS,
+    );
+  }
+
   Object.entries(STATIONS).forEach(([name, coords]) => {
     const isCurrentDep = name === currentDep;
     const isCurrentArr = name === currentArr;
@@ -204,10 +280,16 @@ function initStationMap(container, popup, currentDep, currentArr) {
 
     markers[name] = marker
       .bindTooltip(korailDisplayStationName(name), { permanent: false, direction: "top" })
-      .on("click", () => {
+      .on("click", (event) => {
         const activeTab = popup.querySelector(".tabPage.active") || popup;
         const option = [...activeTab.querySelectorAll("a, button")]
           .find((a) => korailStationKey(a.textContent.trim()) === name && isVisibleElement(a));
+        if (usesNativeStationClick) {
+          if (!option) return;
+          highlightIcon(name, true);
+          armGlobalStationOption(option, name, event.originalEvent);
+          return;
+        }
         option?.click();
       });
   });
@@ -329,7 +411,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
         highlightIcon(name, true);
         showHoverMarker(name, true);
         // 현재 줌 그대로 유지하며 위치만 이동
-        if (hoverTrackingEnabled) {
+        if (hoverTrackingEnabled && !a.classList.contains("korail-station-map-native-target")) {
           map.panTo([STATIONS[name].lat, STATIONS[name].lng], { animate: true, duration: 0.4 });
         }
       });
@@ -441,7 +523,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
         a.addEventListener("mouseenter", () => {
           highlightIcon(name, true);
           showHoverMarker(name, true);
-          if (hoverTrackingEnabled) {
+          if (hoverTrackingEnabled && !a.classList.contains("korail-station-map-native-target")) {
             map.panTo([STATIONS[name].lat, STATIONS[name].lng], { animate: true, duration: 0.4 });
           }
         });
@@ -489,6 +571,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
     if (disposed) return;
     disposed = true;
     clearTimeout(invalidateTimer);
+    restoreGlobalStationOption();
     if (tabUpdateFrame) cancelAnimationFrame(tabUpdateFrame);
     tabObserver.disconnect();
     map.remove();

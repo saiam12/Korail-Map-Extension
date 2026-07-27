@@ -13,7 +13,6 @@ waitForL(() => {
     const mainHost = document.getElementById("korail-main-toggle-host");
     [panel, miniBtn, introBtn, mainBtn, mainHost].forEach((el) => {
       if (!el) return;
-      el.style.zIndex = behind ? "0" : "";
       el.classList.toggle("is-korail-muted", behind);
       el.setAttribute("aria-hidden", behind ? "true" : "false");
     });
@@ -61,7 +60,7 @@ waitForL(() => {
   function showStationMapPopup(popup) {
     const mapPopup = document.createElement("div");
     mapPopup.id = "korail-station-map-popup";
-    document.body.appendChild(mapPopup);
+    popup.closest(".ReactModal__Overlay")?.appendChild(mapPopup) || document.body.appendChild(mapPopup);
 
     const vw = window.innerWidth;
     const vh = window.innerHeight;

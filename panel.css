@@ -536,6 +536,45 @@
   transition: transform 0.15s ease;
 }
 
+.korail-station-map-native-target {
+  position: fixed !important;
+  z-index: 2147483647 !important;
+  width: 20px !important;
+  min-width: 20px !important;
+  height: 20px !important;
+  min-height: 20px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: transparent !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  cursor: pointer !important;
+  pointer-events: auto !important;
+  transform: translate(-50%, -50%) !important;
+}
+
+.korail-station-map-placeholder {
+  pointer-events: none !important;
+}
+
+.korail-station-map-selection-hint {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 1001;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.88);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
 .korail-station-tracking-toggle input:checked + .korail-station-tracking-toggle__switch {
   background: #0052a4;
 }
