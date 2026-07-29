@@ -984,6 +984,7 @@ waitForL(() => {
       if (input) input.value = item.dataset.address || "";
       if (includeAll) includeAll.checked = item.dataset.includeAll === "true";
       closeNearestHistory(panel);
+      panel.querySelector("form")?.requestSubmit();
       input?.focus();
     });
   }
