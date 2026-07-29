@@ -1,6 +1,6 @@
 // content.js는 페이지 컨텍스트에 나머지 스크립트를 순서대로 주입하는 역할만 합니다.
 
-const FILES = ["leaflet.js", "station-data.js", "station-translations.js", "map-panel.js", "injected-core.js", "support-widget.js", "home-panel.js", "station-popup.js", "booking-map.js"];
+const FILES = ["leaflet.js", "station-data.js", "station-translations.js", "map-panel.js", "injected.js", "support-widget.js", "home-panel.js", "station-popup.js", "booking-map.js"];
 const INJECTED_RESOURCE_VERSION = chrome.runtime.getManifest().version;
 
 window.addEventListener("message", async (event) => {
