@@ -130,12 +130,32 @@ waitForL(() => {
       }) || null;
   }
 
-  async function chooseStationThroughPicker(type, stationName) {
+  function findVisibleStationPickerTrigger(type) {
     const selector = type === "dep" ? "a.btn_pop.btn_start" : "a.btn_pop.btn_end";
-    const trigger = [...document.querySelectorAll(selector)].find((el) => {
+    return [...document.querySelectorAll(selector)].find((el) => {
       const rect = el.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0;
+    }) || null;
+  }
+
+  function waitForStationPickerTrigger(type, timeout = 3000) {
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      function findTrigger() {
+        const trigger = findVisibleStationPickerTrigger(type);
+        if (trigger || Date.now() - startedAt >= timeout) return resolve(trigger);
+        requestAnimationFrame(findTrigger);
+      }
+      findTrigger();
     });
+  }
+
+  async function chooseStationThroughPicker(type, stationName) {
+    let trigger = findVisibleStationPickerTrigger(type);
+    if (!trigger && location.pathname.includes("/intro")) {
+      document.querySelector("button.search_btn")?.click();
+      trigger = await waitForStationPickerTrigger(type);
+    }
     if (!trigger) return false;
 
     trigger.click();

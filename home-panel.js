@@ -1087,6 +1087,11 @@ waitForL(() => {
     const isIntroPage = location.pathname.includes("/intro");
     const existingPanel = document.getElementById(HOME_PANEL_ID);
     if (existingPanel) {
+      if (!isIntroPage && existingPanel.dataset.korailIntroPanel === "true") {
+        cleanupHomeNearestPanel();
+        injectHomeNearestPanel();
+        return;
+      }
       if (existingPanel.dataset.korailLang !== getKorailLocale()) {
         renderHomeNearestPanel(existingPanel);
         bindHomeNearestPanel(existingPanel);
@@ -1094,11 +1099,6 @@ waitForL(() => {
       positionHomeNearestPanel(existingPanel);
       return;
     }
-    if (document.querySelector(".tckWrap")) {
-      cleanupHomeNearestPanel();
-      return;
-    }
-
     const panel = document.createElement("section");
     panel.id = HOME_PANEL_ID;
     renderHomeNearestPanel(panel);
@@ -1137,6 +1137,7 @@ waitForL(() => {
 
   function injectIntroPanel(panel) {
     clearHomePanelLayoutTracking();
+    panel.dataset.korailIntroPanel = "true";
     document.getElementById("korail-intro-toggle-btn")?.remove();
     const searchBtn = document.querySelector("button.search_btn");
     const searchSection = document.querySelector("section.search");

@@ -679,6 +679,10 @@
   flex-direction: column;
   gap: 4px;
   margin-top: 6px;
+  padding: 5px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
 }
 
 .korail-station-address-history[hidden] {
