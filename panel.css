@@ -743,6 +743,20 @@
   font-size: 12px;
 }
 
+.korail-station-address-results__item .korail-station-address-results__major {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0 0 4px;
+  border-radius: 999px;
+  padding: 1px 4px;
+  background: #e8f3ff;
+  color: #0052a4;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.2;
+  vertical-align: 1px;
+}
+
 .korail-station-address-results__item span {
   margin-top: 2px;
   color: #64748b;

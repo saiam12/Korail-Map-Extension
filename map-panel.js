@@ -560,12 +560,20 @@ function initStationMap(container, popup, currentDep, currentArr) {
       label.className = "korail-station-address-results__label";
       label.textContent = `${text.top} ${stations.length}`;
       results.appendChild(label);
+      const showMajorBadges = includeAllStations.checked;
+      const majorBadgeLabel = isGlobalLocale ? "Major" : "주요역";
       stations.forEach((station, index) => {
         const item = document.createElement("button");
         item.type = "button";
         item.className = "korail-station-address-results__item";
         const name = document.createElement("strong");
         name.textContent = `${index + 1}. ${korailDisplayStationName(station.name)}`;
+        if (showMajorBadges && STATIONS[station.name]?.major === true) {
+          const major = document.createElement("span");
+          major.className = "korail-station-address-results__major";
+          major.textContent = majorBadgeLabel;
+          name.append(major);
+        }
         const meta = document.createElement("span");
         meta.textContent = `🚗 ${station.durationText} · 📍 ${station.distanceText}`;
         item.append(name, meta);
