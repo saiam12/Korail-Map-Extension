@@ -185,6 +185,8 @@ function initStationMap(container, popup, currentDep, currentArr) {
   // 모든 역 마커 생성 (초기엔 지도에 추가 안 함)
   const markers = {};
   let hoverMarker = null;
+  let addressMarker = null;
+  let matchedStationMarkers = [];
   let hoverTrackingEnabled = true;
   let visibleStationNames = new Set();
   let globalStationSelectionTimer = null;
@@ -333,6 +335,57 @@ function initStationMap(container, popup, currentDep, currentArr) {
     return true;
   }
 
+  function showAddressStationMatch(address, origin, stations) {
+    const matchedStations = stations.filter((station) => STATIONS[station.name]);
+    if (!matchedStations.length) return;
+
+    addressMarker?.remove();
+    matchedStationMarkers.forEach((marker) => marker.remove());
+
+    const addressLabel = document.createElement("span");
+    addressLabel.textContent = address;
+    addressMarker = L.circleMarker([origin.lat, origin.lng], {
+      radius: stationMarkerRadius(false),
+      color: "#fff",
+      weight: stationMarkerBorderWeight,
+      fillColor: "#16a34a",
+      fillOpacity: 1,
+    }).addTo(map).bindTooltip(addressLabel);
+    matchedStationMarkers = matchedStations.map((station, index) => L.circleMarker([station.lat, station.lng], {
+      radius: 7,
+      color: "#fff",
+      weight: 3,
+              fillColor: ["#2968a3", "#4d7ead", "#6d93b5"][index] || "#6d93b5",
+      fillOpacity: 1,
+    }).addTo(map).bindTooltip(`${index + 1}. ${korailDisplayStationName(station.name)}`));
+
+    map.flyToBounds([
+      [origin.lat, origin.lng],
+      ...matchedStations.map((station) => [station.lat, station.lng]),
+    ], {
+      padding: [40, 40],
+      animate: true,
+      duration: 0.45,
+    });
+  }
+
+  function highlightMatchedStationMarker(index) {
+    const marker = matchedStationMarkers[index];
+    if (!marker) return;
+    marker.setRadius(10);
+    marker.setStyle({ weight: 4 });
+    marker.bringToFront();
+    marker.openTooltip();
+  }
+
+  function resetMatchedStationMarkers() {
+    matchedStationMarkers.forEach((marker) => {
+      marker.setRadius(7);
+      marker.setStyle({ weight: 3 });
+      marker.closeTooltip();
+    });
+  }
+
   function moveToRegionStations(stationNames, animate) {
     if (!stationNames.length) return;
     const coords = stationNames.map((name) => [STATIONS[name].lat, STATIONS[name].lng]);
@@ -438,6 +491,203 @@ function initStationMap(container, popup, currentDep, currentArr) {
       });
     });
   } 
+
+  function addAddressStationSearch() {
+    if (popup.querySelector(".korail-station-address-search")) return;
+    const stationSearchInput = [...popup.querySelectorAll("input")].find((input) => {
+      return /역\s*이름|초성\s*검색|station|search/i.test(`${input.placeholder || ""} ${input.getAttribute("aria-label") || ""}`);
+    });
+    if (!stationSearchInput?.parentElement) return;
+
+    const addressSearch = document.createElement("div");
+    addressSearch.className = "korail-station-address-search korail-nearest-search";
+    const text = isGlobalLocale
+      ? {
+        placeholder: "Enter an address to show on the map",
+        currentLocation: "My location",
+        search: "Search",
+        history: "History",
+        includeAllStations: "Include all stations",
+        majorStationsOnly: "Major stations only",
+        top: "TOP",
+        noHistory: "No recent searches.",
+      }
+      : {
+        placeholder: "주소를 지도 위에 표시",
+        currentLocation: "현 위치",
+        search: "검색",
+        history: "최근 기록",
+        includeAllStations: "일반역 포함",
+        majorStationsOnly: "주요역만",
+        top: "TOP",
+        noHistory: "최근 기록이 없습니다.",
+      };
+    addressSearch.innerHTML = `
+      <div class="korail-station-address-search__row korail-nearest-search__row">
+        <input type="text" data-station-address autocomplete="street-address" placeholder="${text.placeholder}" aria-label="${text.placeholder}">
+        <button type="button" class="korail-nearest-card__button" data-station-address-submit>${text.search}</button>
+      </div>
+      <div class="korail-station-address-search__actions">
+        <label class="korail-nearest-search__toggle">
+          <input data-station-address-include-all type="checkbox">
+          <span class="korail-nearest-search__switch" aria-hidden="true"></span>
+          <span>${text.includeAllStations}</span>
+        </label>
+        <button type="button" class="korail-nearest-location-button" data-station-address-current-location><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg><span>${text.currentLocation}</span></button>
+        <button type="button" class="korail-nearest-history-button" data-station-address-history-toggle aria-expanded="false" aria-controls="korail-station-address-history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5M12 7v5l3 2"></path></svg><span>${text.history}</span></button>
+      </div>
+      <div id="korail-station-address-history" class="korail-station-address-history" data-station-address-history hidden></div>
+      <div class="korail-station-address-results" data-station-address-results hidden></div>
+    `;
+    stationSearchInput.parentElement.insertAdjacentElement("afterend", addressSearch);
+
+    const input = addressSearch.querySelector("[data-station-address]");
+    const submit = addressSearch.querySelector("[data-station-address-submit]");
+    const currentLocation = addressSearch.querySelector("[data-station-address-current-location]");
+    const includeAllStations = addressSearch.querySelector("[data-station-address-include-all]");
+    const historyToggle = addressSearch.querySelector("[data-station-address-history-toggle]");
+    const history = addressSearch.querySelector("[data-station-address-history]");
+    const results = addressSearch.querySelector("[data-station-address-results]");
+    const renderResults = (stations) => {
+      results.replaceChildren();
+      results.classList.toggle("korail-station-address-results--five", stations.length === 5);
+      if (!stations.length) {
+        results.hidden = true;
+        return;
+      }
+
+      const label = document.createElement("span");
+      label.className = "korail-station-address-results__label";
+      label.textContent = `${text.top} ${stations.length}`;
+      results.appendChild(label);
+      stations.forEach((station, index) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "korail-station-address-results__item";
+        const name = document.createElement("strong");
+        name.textContent = `${index + 1}. ${korailDisplayStationName(station.name)}`;
+        const meta = document.createElement("span");
+        meta.textContent = `🚗 ${station.durationText} · 📍 ${station.distanceText}`;
+        item.append(name, meta);
+        item.addEventListener("mouseenter", () => highlightMatchedStationMarker(index));
+        item.addEventListener("mouseleave", resetMatchedStationMarkers);
+        item.addEventListener("click", () => {
+          const options = [...popup.querySelectorAll("a, button")]
+            .filter((element) => !element.closest(".korail-station-address-search"));
+          const option = options.find((element) => {
+            return korailStationKey(element.textContent.trim()) === station.name && isVisibleElement(element);
+          }) || options.find((element) => korailStationKey(element.textContent.trim()) === station.name);
+          option?.click();
+        });
+        results.appendChild(item);
+      });
+      results.hidden = false;
+    };
+    const matchAddress = async () => {
+      const address = input.value.trim();
+      if (!address || addressSearch.dataset.busy === "true") return;
+
+      addressSearch.dataset.busy = "true";
+      submit.disabled = true;
+      try {
+        const match = await window.KORAIL_HOME?.findNearestStationMatch?.(address, includeAllStations.checked);
+        if (match?.origin && match.stations?.length) {
+          renderResults(match.stations);
+          showAddressStationMatch(address, match.origin, match.stations);
+        }
+      } catch (error) {
+        console.warn("[Korail] Address station matching failed:", error);
+      } finally {
+        delete addressSearch.dataset.busy;
+        submit.disabled = false;
+      }
+    };
+
+    submit.addEventListener("click", matchAddress);
+    currentLocation.addEventListener("click", async () => {
+      if (currentLocation.disabled) return;
+      currentLocation.disabled = true;
+      try {
+        const address = await window.KORAIL_HOME?.getCurrentLocationAddress?.();
+        if (!address) return;
+        input.value = address;
+        matchAddress();
+      } catch (error) {
+        console.warn("[Korail] Current location lookup failed:", error);
+      } finally {
+        currentLocation.disabled = false;
+      }
+    });
+    historyToggle.addEventListener("click", async () => {
+      if (!history.hidden) {
+        history.hidden = true;
+        historyToggle.setAttribute("aria-expanded", "false");
+        return;
+      }
+
+      history.hidden = false;
+      historyToggle.setAttribute("aria-expanded", "true");
+      history.replaceChildren();
+      const entries = await window.KORAIL_HOME?.getNearestSearchHistory?.() || [];
+      if (!entries.length) {
+        const empty = document.createElement("span");
+        empty.className = "korail-nearest-history__empty";
+        empty.textContent = text.noHistory;
+        history.appendChild(empty);
+        return;
+      }
+      entries.slice(0, 5).forEach((entry) => {
+        const item = document.createElement("div");
+        item.className = "korail-nearest-history__item";
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "korail-nearest-history__remove";
+        remove.setAttribute("aria-label", isGlobalLocale ? `Remove ${entry.address} from history` : `${entry.address} 기록 삭제`);
+        remove.textContent = "×";
+        remove.addEventListener("click", async () => {
+          remove.disabled = true;
+          try {
+            await window.KORAIL_HOME?.removeNearestSearchHistory?.(entry.key);
+          } catch {
+            remove.disabled = false;
+            return;
+          }
+          item.remove();
+          if (!history.children.length) {
+            const empty = document.createElement("span");
+            empty.className = "korail-nearest-history__empty";
+            empty.textContent = text.noHistory;
+            history.appendChild(empty);
+          }
+        });
+        const select = document.createElement("button");
+        select.type = "button";
+        select.className = "korail-nearest-history__select";
+        select.title = entry.address;
+        const address = document.createElement("span");
+        address.className = "korail-nearest-history__address";
+        address.textContent = entry.address;
+        const option = document.createElement("span");
+        option.className = "korail-nearest-history__option";
+        option.textContent = entry.includeAllStations ? text.includeAllStations : text.majorStationsOnly;
+        select.append(address, option);
+        select.addEventListener("click", () => {
+          input.value = entry.address;
+          includeAllStations.checked = entry.includeAllStations === true;
+          history.hidden = true;
+          historyToggle.setAttribute("aria-expanded", "false");
+          matchAddress();
+        });
+        item.append(remove, select);
+        history.appendChild(item);
+      });
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      matchAddress();
+    });
+  }
 
   let trackingTogglePositioned = false;
   let activeStationTab = "";
@@ -550,6 +800,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
 
   showMajorStations();
   attachTabEvents();
+  addAddressStationSearch();
 
   let tabUpdateFrame = 0;
   const tabObserver = new MutationObserver((records) => {

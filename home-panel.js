@@ -10,6 +10,7 @@ waitForL(() => {
     isVisibleFullMenuOpen,
   } = window.KORAIL_SHARED;
   const nearestSearchCache = new Map();
+  const nearestSearchOrigins = new Map();
   const pendingNearestSearches = new Map();
   const nearestSearchTimestamps = [];
   const nearestCacheTtlMs = 7 * 24 * 60 * 60 * 1000;
@@ -587,6 +588,7 @@ waitForL(() => {
 
   async function clearNearestSearchCache() {
     nearestSearchCache.clear();
+    nearestSearchOrigins.clear();
     await requestNearestCache("clear");
   }
 
@@ -659,6 +661,8 @@ waitForL(() => {
 
     const showMajorBadges = panel.querySelector("[data-nearest-include-all]")?.checked === true;
     const majorBadgeLabel = isKoreanLocale() ? "주요역" : "Major";
+    const departureLabel = isKoreanLocale() ? "출발" : "Departure";
+    const arrivalLabel = isKoreanLocale() ? "도착" : "Arrival";
     result.innerHTML = `
       <span class="korail-nearest-card__result-label">TOP ${stations.length}</span>
       <ol class="korail-nearest-list">
@@ -667,6 +671,10 @@ waitForL(() => {
             <span class="korail-nearest-list__rank">${index + 1}</span>
             <span class="korail-nearest-list__name">${escapeHtml(stationName(station.name))}${showMajorBadges && STATIONS[station.name]?.major === true ? `<span class="korail-nearest-list__major">${majorBadgeLabel}</span>` : ""}</span>
             <span class="korail-nearest-list__meta">🚗 ${station.durationText} · 📍 ${station.distanceText}</span>
+            <span class="korail-nearest-list__actions">
+              <button type="button" class="korail-nearest-list__station-button" data-nearest-station-select data-nearest-station-type="dep" data-nearest-station-name="${escapeHtml(stationName(station.name))}">${departureLabel}</button>
+              <button type="button" class="korail-nearest-list__station-button" data-nearest-station-select data-nearest-station-type="arr" data-nearest-station-name="${escapeHtml(stationName(station.name))}">${arrivalLabel}</button>
+            </span>
           </li>
         `).join("")}
       </ol>
@@ -793,10 +801,12 @@ waitForL(() => {
     const cacheKey = getNearestSearchCacheKey(normalizedAddress, includeAllStations);
     const cachedResults = nearestSearchCache.get(cacheKey);
     if (cachedResults) {
+      const origin = nearestSearchOrigins.get(cacheKey);
       await requestNearestCache("set", cacheKey, {
         savedAt: Date.now(),
         address: normalizedAddress,
         includeAllStations,
+        origin,
         results: cachedResults,
       }).catch(() => null);
       return cachedResults.slice(0, resultLimit);
@@ -810,11 +820,16 @@ waitForL(() => {
       const stored = await requestNearestCache("get", cacheKey).catch(() => null);
       if (stored && Date.now() - stored.savedAt <= nearestCacheTtlMs && Array.isArray(stored.results)) {
         const storedResults = formatCachedNearestResults(stored.results);
+        const origin = Number.isFinite(stored.origin?.lat) && Number.isFinite(stored.origin?.lng)
+          ? stored.origin
+          : null;
         nearestSearchCache.set(cacheKey, storedResults);
+        if (origin) nearestSearchOrigins.set(cacheKey, origin);
         await requestNearestCache("set", cacheKey, {
           savedAt: Date.now(),
           address: normalizedAddress,
           includeAllStations,
+          origin,
           results: storedResults,
         }).catch(() => null);
         return storedResults;
@@ -828,10 +843,12 @@ waitForL(() => {
       results.sort((a, b) => a.durationSeconds - b.durationSeconds);
       const savedResults = results.map((station) => ({ ...station }));
       nearestSearchCache.set(cacheKey, savedResults);
+      nearestSearchOrigins.set(cacheKey, origin);
       await requestNearestCache("set", cacheKey, {
         savedAt: Date.now(),
         address: normalizedAddress,
         includeAllStations,
+        origin,
         results: savedResults,
       }).catch(() => null);
       return savedResults;
@@ -989,6 +1006,25 @@ waitForL(() => {
     });
   }
 
+  function bindNearestStationActions(panel) {
+    if (panel.dataset.nearestStationActionsBound === "true") return;
+    panel.dataset.nearestStationActionsBound = "true";
+    panel.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-nearest-station-select]");
+      if (!button || !panel.contains(button)) return;
+
+      button.disabled = true;
+      try {
+        await window.KORAIL_BOOKING?.chooseStationThroughPicker?.(
+          button.dataset.nearestStationType,
+          button.dataset.nearestStationName,
+        );
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+
   function bindHomeNearestPanel(panel) {
     const form = panel.querySelector("[data-nearest-form]");
     form?.addEventListener("submit", (event) => {
@@ -997,6 +1033,7 @@ waitForL(() => {
     });
     panel.querySelector("[data-nearest-current-location]")?.addEventListener("click", () => fillCurrentLocation(panel));
     bindNearestHistory(panel);
+    bindNearestStationActions(panel);
   }
 
   // 가까운 역 패널의 기본 HTML을 렌더링합니다.
@@ -1074,6 +1111,26 @@ waitForL(() => {
       positionHomeNearestPanel(panel);
       updateNearestDisabledState();
     }
+  }
+
+  async function findNearestStationMatch(address, includeAllStations = false) {
+    const normalizedAddress = String(address || "").trim().replace(/([가-힣])\s+(\d+(길|로|가))/g, "$1$2");
+    const stations = await findNearestStationResults(normalizedAddress, includeAllStations);
+    const cacheKey = getNearestSearchCacheKey(normalizedAddress, includeAllStations);
+    let origin = nearestSearchOrigins.get(cacheKey);
+
+    if (!origin) {
+      origin = await geocodeAddress(normalizedAddress);
+      nearestSearchOrigins.set(cacheKey, origin);
+      await requestNearestCache("set", cacheKey, {
+        savedAt: Date.now(),
+        address: normalizedAddress,
+        includeAllStations,
+        origin,
+        results: nearestSearchCache.get(cacheKey) || stations,
+      }).catch(() => null);
+    }
+    return { origin, stations };
   }
 
   // 인트로 화면의 가까운 역 패널을 삽입합니다.
@@ -1218,9 +1275,13 @@ waitForL(() => {
     positionHomeNearestPanel,
     injectHomeNearestPanel,
     findNearestStationResults,
+    findNearestStationMatch,
+    getNearestSearchHistory: () => requestNearestCache("list").catch(() => []),
+    removeNearestSearchHistory: (key) => requestNearestCache("hide", key),
     getCurrentLocationAddress,
     renderNearestResults,
     bindNearestHistory,
+    bindNearestStationActions,
     clearNearestSearchCache,
   };
 }); // waitForL

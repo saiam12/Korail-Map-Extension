@@ -126,6 +126,7 @@
   const showNearest = () => {
     if (!isGlobalNearestPage()) return;
     window.KORAIL_HOME?.bindNearestHistory?.(nearest);
+    window.KORAIL_HOME?.bindNearestStationActions?.(nearest);
     choice.hidden = true;
     inquiry.hidden = true;
     feedback.hidden = true;

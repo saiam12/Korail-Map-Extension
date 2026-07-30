@@ -153,6 +153,8 @@ waitForL(() => {
     return true;
   }
 
+  window.KORAIL_BOOKING = { chooseStationThroughPicker };
+
   async function swapStationsThroughPicker(depField, arrField) {
     const displayedDep = getStationFieldValue(depField);
     const displayedArr = getStationFieldValue(arrField);
