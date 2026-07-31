@@ -97,7 +97,7 @@ function isValidPageRequest(request) {
 }
 
 const nearestCacheStorageKey = "korail-nearest-search-cache-v1";
-const nearestCacheMaxEntries = 100;
+const nearestCacheMaxEntries = 300;
 const nearestCacheTtlMs = 7 * 24 * 60 * 60 * 1000;
 let nearestCacheWriteQueue = Promise.resolve();
 

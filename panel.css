@@ -633,33 +633,21 @@
   margin: 10px 0 0;
 }
 
-.korail-station-address-search__row {
-  width: 100%;
-  grid-template-columns: minmax(0, 1fr) 84px;
-  column-gap: 20px;
-}
-
-.korail-station-address-search__row input {
-  width: 100% !important;
-  max-width: none !important;
-  min-width: 0 !important;
-}
-
-.korail-station-address-search__row input,
-.korail-station-address-search__row .korail-nearest-card__button {
-  border-radius: 9px;
-}
-
-.korail-station-address-search[data-busy="true"] [data-station-address-submit] {
+.sch_box[data-busy="true"] .btn_sch {
+  position: relative;
+  background-image: none !important;
   cursor: wait;
 }
 
-.korail-station-address-search[data-busy="true"] [data-station-address-submit]::before {
+.sch_box[data-busy="true"] .btn_sch::after {
   content: "";
-  width: 12px;
-  height: 12px;
-  border: 2px solid rgba(255, 255, 255, 0.45);
-  border-top-color: #fff;
+  position: absolute;
+  inset: 0;
+  width: 13px;
+  height: 13px;
+  margin: auto;
+  border: 2px solid #b9d1e8;
+  border-top-color: #0054a6;
   border-radius: 50%;
   animation: korail-nearest-loading 0.7s linear infinite;
 }
@@ -678,6 +666,8 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  max-height: 190px;
+  overflow-y: auto;
   margin-top: 6px;
   padding: 5px;
   border: 1px solid #cbd5e1;

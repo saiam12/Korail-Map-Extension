@@ -345,10 +345,10 @@ function initStationMap(container, popup, currentDep, currentArr) {
     const addressLabel = document.createElement("span");
     addressLabel.textContent = address;
     addressMarker = L.circleMarker([origin.lat, origin.lng], {
-      radius: stationMarkerRadius(false),
+      radius: stationMarkerRadius(false) + 1,
       color: "#fff",
       weight: stationMarkerBorderWeight,
-      fillColor: "#16a34a",
+      fillColor: "#00c853",
       fillOpacity: 1,
     }).addTo(map).bindTooltip(addressLabel);
     matchedStationMarkers = matchedStations.map((station, index) => L.circleMarker([station.lat, station.lng], {
@@ -357,7 +357,18 @@ function initStationMap(container, popup, currentDep, currentArr) {
       weight: 3,
               fillColor: ["#2968a3", "#4d7ead", "#6d93b5"][index] || "#6d93b5",
       fillOpacity: 1,
-    }).addTo(map).bindTooltip(`${index + 1}. ${korailDisplayStationName(station.name)}`));
+    }).addTo(map).bindTooltip(`${index + 1}. ${korailDisplayStationName(station.name)}`).on("click", (event) => {
+      const activeTab = popup.querySelector(".tabPage.active") || popup;
+      const option = [...activeTab.querySelectorAll("a, button")]
+        .find((element) => korailStationKey(element.textContent.trim()) === station.name && isVisibleElement(element));
+      if (usesNativeStationClick) {
+        if (!option) return;
+        highlightIcon(station.name, true);
+        armGlobalStationOption(option, station.name, event.originalEvent);
+        return;
+      }
+      option?.click();
+    }));
 
     map.flyToBounds([
       [origin.lat, origin.lng],
@@ -499,13 +510,23 @@ function initStationMap(container, popup, currentDep, currentArr) {
     });
     if (!stationSearchInput?.parentElement) return;
 
+    const stationSearchRow = stationSearchInput.parentElement;
+    const submit = stationSearchRow.querySelector("button.btn_sch");
+    if (!submit) return;
+    const stationSearchPlaceholder = isGlobalLocale
+      ? "Stations, initials, or addresses (City Hall, public offices)"
+      : "역 이름·초성·주소(서울:ㅅㅇ, 대구 수성구, 서울시청)";
+    const stationSearchTitle = isGlobalLocale
+      ? "Enter a station name, initials, or address"
+      : "역 이름, 초성 또는 주소를 입력해 주세요";
+    stationSearchInput.placeholder = stationSearchPlaceholder;
+    stationSearchInput.setAttribute("aria-label", stationSearchPlaceholder);
+    stationSearchInput.title = stationSearchTitle;
     const addressSearch = document.createElement("div");
-    addressSearch.className = "korail-station-address-search korail-nearest-search";
+    addressSearch.className = "korail-station-address-search";
     const text = isGlobalLocale
       ? {
-        placeholder: "Enter an address to show on the map",
         currentLocation: "My location",
-        search: "Search",
         history: "History",
         includeAllStations: "Include all stations",
         majorStationsOnly: "Major stations only",
@@ -513,9 +534,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
         noHistory: "No recent searches.",
       }
       : {
-        placeholder: "주소를 지도 위에 표시",
         currentLocation: "현 위치",
-        search: "검색",
         history: "최근 기록",
         includeAllStations: "일반역 포함",
         majorStationsOnly: "주요역만",
@@ -523,10 +542,6 @@ function initStationMap(container, popup, currentDep, currentArr) {
         noHistory: "최근 기록이 없습니다.",
       };
     addressSearch.innerHTML = `
-      <div class="korail-station-address-search__row korail-nearest-search__row">
-        <input type="text" data-station-address autocomplete="street-address" placeholder="${text.placeholder}" aria-label="${text.placeholder}">
-        <button type="button" class="korail-nearest-card__button" data-station-address-submit>${text.search}</button>
-      </div>
       <div class="korail-station-address-search__actions">
         <label class="korail-nearest-search__toggle">
           <input data-station-address-include-all type="checkbox">
@@ -539,15 +554,18 @@ function initStationMap(container, popup, currentDep, currentArr) {
       <div id="korail-station-address-history" class="korail-station-address-history" data-station-address-history hidden></div>
       <div class="korail-station-address-results" data-station-address-results hidden></div>
     `;
-    stationSearchInput.parentElement.insertAdjacentElement("afterend", addressSearch);
+    stationSearchRow.insertAdjacentElement("afterend", addressSearch);
 
-    const input = addressSearch.querySelector("[data-station-address]");
-    const submit = addressSearch.querySelector("[data-station-address-submit]");
+    const input = stationSearchInput;
     const currentLocation = addressSearch.querySelector("[data-station-address-current-location]");
     const includeAllStations = addressSearch.querySelector("[data-station-address-include-all]");
     const historyToggle = addressSearch.querySelector("[data-station-address-history-toggle]");
     const history = addressSearch.querySelector("[data-station-address-history]");
     const results = addressSearch.querySelector("[data-station-address-results]");
+    const setSearchInputValue = (value) => {
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
     const renderResults = (stations) => {
       results.replaceChildren();
       results.classList.toggle("korail-station-address-results--five", stations.length === 5);
@@ -593,9 +611,10 @@ function initStationMap(container, popup, currentDep, currentArr) {
     };
     const matchAddress = async () => {
       const address = input.value.trim();
-      if (!address || addressSearch.dataset.busy === "true") return;
+      const isStationSearch = STATIONS[korailStationKey(address)] || /^[ㄱ-ㅎ]+$/.test(address);
+      if (!address || isStationSearch || stationSearchRow.dataset.busy === "true") return;
 
-      addressSearch.dataset.busy = "true";
+      stationSearchRow.dataset.busy = "true";
       submit.disabled = true;
       try {
         const match = await window.KORAIL_HOME?.findNearestStationMatch?.(address, includeAllStations.checked);
@@ -606,19 +625,24 @@ function initStationMap(container, popup, currentDep, currentArr) {
       } catch (error) {
         console.warn("[Korail] Address station matching failed:", error);
       } finally {
-        delete addressSearch.dataset.busy;
+        delete stationSearchRow.dataset.busy;
         submit.disabled = false;
       }
     };
 
     submit.addEventListener("click", matchAddress);
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      submit.click();
+    });
     currentLocation.addEventListener("click", async () => {
       if (currentLocation.disabled) return;
       currentLocation.disabled = true;
       try {
         const address = await window.KORAIL_HOME?.getCurrentLocationAddress?.();
         if (!address) return;
-        input.value = address;
+        setSearchInputValue(address);
         matchAddress();
       } catch (error) {
         console.warn("[Korail] Current location lookup failed:", error);
@@ -644,7 +668,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
         history.appendChild(empty);
         return;
       }
-      entries.slice(0, 5).forEach((entry) => {
+      entries.forEach((entry) => {
         const item = document.createElement("div");
         item.className = "korail-nearest-history__item";
         const remove = document.createElement("button");
@@ -680,7 +704,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
         option.textContent = entry.includeAllStations ? text.includeAllStations : text.majorStationsOnly;
         select.append(address, option);
         select.addEventListener("click", () => {
-          input.value = entry.address;
+          setSearchInputValue(entry.address);
           includeAllStations.checked = entry.includeAllStations === true;
           history.hidden = true;
           historyToggle.setAttribute("aria-expanded", "false");
@@ -689,11 +713,6 @@ function initStationMap(container, popup, currentDep, currentArr) {
         item.append(remove, select);
         history.appendChild(item);
       });
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter") return;
-      event.preventDefault();
-      matchAddress();
     });
   }
 
