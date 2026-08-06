@@ -93,7 +93,10 @@ function isValidPageRequest(request) {
       && /^\d{1,6}$/.test(request.trainNo || "")
       && /^\d{0,6}$/.test(request.trainGroupCode || "");
   }
-  return request.kind === "locationReverse" && Number.isFinite(request.lat) && Number.isFinite(request.lng);
+  return request.kind === "locationReverse"
+    && Number.isFinite(request.lat)
+    && Number.isFinite(request.lng)
+    && (!request.language || ["kor", "eng"].includes(request.language));
 }
 
 const nearestCacheStorageKey = "korail-nearest-search-cache-v1";

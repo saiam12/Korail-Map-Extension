@@ -709,7 +709,11 @@ waitForL(() => {
   }
 
   async function reverseGeocodeLocation({ lat, lng }) {
-    const data = await requestNaverApi("locationReverse", { lat, lng });
+    const data = await requestNaverApi("locationReverse", {
+      lat,
+      lng,
+      language: isKoreanLocale() ? "kor" : "eng",
+    });
     if (!data.display_name) throw new Error(t("geocodeNotFound"));
     return data.display_name;
   }

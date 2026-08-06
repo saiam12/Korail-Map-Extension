@@ -1,4 +1,5 @@
 const NAVER_MAPS_BASE_URL = "https://maps.apigw.ntruss.com";
+const NAVER_DIRECTIONS_BASE_URL = "https://naveropenapi.apigw.ntruss.com";
 
 function json(data, status = 200, origin = "", extraHeaders = {}) {
   const headers = {
@@ -87,6 +88,11 @@ function naverReverseAddress(data) {
   return [...region, land].filter(Boolean).join(" ");
 }
 
+function naverEnglishAddress(data) {
+  const address = data.addresses?.[0];
+  return address?.englishAddress || address?.roadAddress || address?.jibunAddress || "";
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get("Origin") || "";
@@ -170,7 +176,7 @@ export default {
         goal: `${Number(body.goalLng)},${Number(body.goalLat)}`,
         option: "trafast",
       });
-      naverUrl = `${NAVER_MAPS_BASE_URL}/map-direction/v1/driving?${query}`;
+      naverUrl = `${NAVER_DIRECTIONS_BASE_URL}/map-direction/v1/driving?${query}`;
     }
 
     const result = await requestNaver(naverUrl, env);
@@ -181,9 +187,12 @@ export default {
     }
     if (pathname === "/v1/reverse-geocode" && result.ok) {
       const displayName = naverReverseAddress(result.data);
-      return displayName
-        ? json({ display_name: displayName }, 200, origin)
-        : json({ error: "Reverse geocoding failed." }, 502, origin);
+      if (!displayName) return json({ error: "Reverse geocoding failed." }, 502, origin);
+      if (body.language !== "eng") return json({ display_name: displayName }, 200, origin);
+
+      const englishQuery = new URLSearchParams({ query: displayName, language: "eng", count: "1" });
+      const englishResult = await requestNaver(`${NAVER_MAPS_BASE_URL}/map-geocode/v2/geocode?${englishQuery}`, env);
+      return json({ display_name: naverEnglishAddress(englishResult.data) || displayName }, 200, origin);
     }
     if (result.ok && body.kind === "geocode" && result.data.status !== "OK") {
       return json({ error: result.data.errorMessage || "Geocoding failed." }, 502, origin);

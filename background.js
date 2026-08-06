@@ -75,7 +75,12 @@ async function handleNaverApiRequest(request) {
     const path = request.kind === "locationGeocode" ? "/v1/geocode" : "/v1/reverse-geocode";
     const payload = request.kind === "locationGeocode"
       ? { kind: request.kind, address: request.address }
-      : { kind: request.kind, lat: request.lat, lng: request.lng };
+      : {
+        kind: request.kind,
+        lat: request.lat,
+        lng: request.lng,
+        language: request.language,
+      };
     return requestProxy(new URL(path, proxyUrl.origin).href, payload);
   }
 

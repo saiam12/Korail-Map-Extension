@@ -633,6 +633,35 @@
   margin: 10px 0 0;
 }
 
+.korail-global-station-search + .korail-station-address-search {
+  margin-bottom: 16px;
+}
+
+.type_station_lookup-pop .korail-global-station-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.type_station_lookup-pop .korail-global-station-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 38px;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 0 12px;
+  color: #111827;
+  font: inherit;
+}
+
+.type_station_lookup-pop .korail-global-station-search input:focus {
+  border-color: #0052a4;
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(0, 82, 164, 0.14);
+}
+
 .sch_box[data-busy="true"] .btn_sch {
   position: relative;
   background-image: none !important;
@@ -654,8 +683,31 @@
 
 .korail-station-address-search__actions {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 14px;
+}
+
+.korail-station-address-search__toggles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.type_station_lookup-pop .station_wrap.korail-station-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.type_station_lookup-pop .korail-station-heading-row .txt {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.type_station_lookup-pop .korail-station-heading-row .korail-station-tracking-toggle {
+  position: static;
+  z-index: auto;
 }
 
 .korail-station-address-search__actions .korail-nearest-history-button {
