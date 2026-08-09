@@ -162,8 +162,8 @@ function initStationMap(container, popup, currentDep, currentArr) {
   );
   const isGlobalLocale = window.KORAIL_I18N?.getLocale?.() !== "ko";
   const isGlobalMainPage = isGlobalLocale && /^\/global\/[^/]+\/main\/?$/i.test(location.pathname);
-  const isDomesticBookingPage = /^\/ticket\/search\/list(?:\/discount)?\/?$/i.test(location.pathname);
-  const usesNativeStationClick = (isGlobalLocale && !isGlobalMainPage) || isDomesticBookingPage;
+  const usesHoverStationClick = !isGlobalLocale;
+  const usesNativeStationClick = (isGlobalLocale && !isGlobalMainPage) || usesHoverStationClick;
   const map = L.map(container, {
     maxBounds: koreaBounds,
     maxBoundsViscosity: 1.0,
@@ -172,13 +172,11 @@ function initStationMap(container, popup, currentDep, currentArr) {
     zoomDelta: 0.5,
   }).setView([36.5, 127.8], 7);
 
-  const globalStationSelectionHint = usesNativeStationClick ? document.createElement("div") : null;
+  const globalStationSelectionHint = usesNativeStationClick && !usesHoverStationClick ? document.createElement("div") : null;
   if (globalStationSelectionHint) {
     globalStationSelectionHint.className = "korail-station-map-selection-hint";
     globalStationSelectionHint.hidden = true;
-    globalStationSelectionHint.textContent = isGlobalLocale
-      ? "Double-click a station point to select it."
-      : "더블클릭하여 선택해 주세요.";
+    globalStationSelectionHint.textContent = "Double-click a station point to select it.";
     container.appendChild(globalStationSelectionHint);
   }
 
@@ -199,7 +197,8 @@ function initStationMap(container, popup, currentDep, currentArr) {
   const markers = {};
   let hoverMarker = null;
   let addressMarker = null;
-  let matchedStationMarkers = [];
+  let matchedStationNames = [];
+  const matchedStationStyles = new Map();
   let hoverTrackingEnabled = true;
   let visibleStationNames = new Set();
   let globalStationSelectionTimer = null;
@@ -207,37 +206,64 @@ function initStationMap(container, popup, currentDep, currentArr) {
   let globalStationSelectionName = "";
   let globalStationSelectionStyle = null;
   let globalStationSelectionClickHandler = null;
+  let globalStationSelectionMouseLeaveHandler = null;
+  let globalStationSelectionMouseMoveHandler = null;
   let globalStationSelectionPopupZIndex = null;
   let globalStationSelectionPlaceholder = null;
+  let globalStationSelectionSourceElement = null;
+  let addressResultsPointerMoveHandler = null;
+  let guardedAddressResultItem = null;
+
+  function stopAddressResultsPointerWait() {
+    if (addressResultsPointerMoveHandler) {
+      document.removeEventListener("pointermove", addressResultsPointerMoveHandler, true);
+    }
+    addressResultsPointerMoveHandler = null;
+    guardedAddressResultItem?.classList.remove("is-pointer-guarded");
+    guardedAddressResultItem = null;
+  }
 
   function restoreGlobalStationOption(showHint = false) {
     clearTimeout(globalStationSelectionTimer);
     globalStationSelectionTimer = null;
     if (globalStationSelectionOption) {
       globalStationSelectionOption.removeEventListener("click", globalStationSelectionClickHandler);
+      globalStationSelectionOption.removeEventListener("mouseleave", globalStationSelectionMouseLeaveHandler);
       globalStationSelectionOption.classList.remove("korail-station-map-native-target");
       if (globalStationSelectionStyle === null) globalStationSelectionOption.removeAttribute("style");
       else globalStationSelectionOption.setAttribute("style", globalStationSelectionStyle);
     }
-    if (globalStationSelectionName) highlightIcon(globalStationSelectionName, false);
+    if (globalStationSelectionMouseMoveHandler) {
+      document.removeEventListener("mousemove", globalStationSelectionMouseMoveHandler, true);
+    }
+    globalStationSelectionSourceElement?.classList.remove("is-native-hovered");
+    if (globalStationSelectionName) {
+      highlightIcon(globalStationSelectionName, false);
+      showHoverMarker(globalStationSelectionName, false);
+    }
     if (globalStationSelectionPopupZIndex !== null) {
       popup.style.zIndex = globalStationSelectionPopupZIndex;
       globalStationSelectionPopupZIndex = null;
     }
     globalStationSelectionPlaceholder?.remove();
     globalStationSelectionPlaceholder = null;
+    globalStationSelectionSourceElement = null;
     globalStationSelectionOption = null;
     globalStationSelectionName = "";
     globalStationSelectionStyle = null;
     globalStationSelectionClickHandler = null;
+    globalStationSelectionMouseLeaveHandler = null;
+    globalStationSelectionMouseMoveHandler = null;
     if (showHint && globalStationSelectionHint) globalStationSelectionHint.hidden = false;
   }
 
-  function armGlobalStationOption(option, name, pointerEvent) {
+  function armGlobalStationOption(option, name, pointerEvent, restoreOnMouseLeave = false, targetElement = null) {
     restoreGlobalStationOption();
     if (globalStationSelectionHint) globalStationSelectionHint.hidden = true;
     globalStationSelectionOption = option;
     globalStationSelectionName = name;
+    globalStationSelectionSourceElement = targetElement;
+    targetElement?.classList.add("is-native-hovered");
     globalStationSelectionStyle = option.getAttribute("style");
     globalStationSelectionPopupZIndex = popup.style.zIndex;
     globalStationSelectionPlaceholder = option.cloneNode(true);
@@ -249,18 +275,77 @@ function initStationMap(container, popup, currentDep, currentArr) {
     popup.style.zIndex = "2147483646";
     const point = map.latLngToContainerPoint([STATIONS[name].lat, STATIONS[name].lng]);
     const rect = container.getBoundingClientRect();
+    const targetRect = targetElement?.getBoundingClientRect();
+    const targetX = targetRect
+      ? targetRect.left + targetRect.width / 2
+      : Number.isFinite(pointerEvent?.clientX) ? pointerEvent.clientX : rect.left + point.x;
+    const targetY = targetRect
+      ? targetRect.top + targetRect.height / 2
+      : Number.isFinite(pointerEvent?.clientY) ? pointerEvent.clientY : rect.top + point.y;
     option.classList.add("korail-station-map-native-target");
-    option.style.left = `${Number.isFinite(pointerEvent?.clientX) ? pointerEvent.clientX : rect.left + point.x}px`;
-    option.style.top = `${Number.isFinite(pointerEvent?.clientY) ? pointerEvent.clientY : rect.top + point.y}px`;
+    option.style.left = `${targetX}px`;
+    option.style.top = `${targetY}px`;
+    if (targetRect) {
+      option.style.setProperty("--korail-native-target-width", `${targetRect.width}px`);
+      option.style.setProperty("--korail-native-target-height", `${targetRect.height}px`);
+      option.style.setProperty("--korail-native-target-radius", "8px");
+    }
+    const clickedOption = option;
     globalStationSelectionClickHandler = () => {
       clearTimeout(globalStationSelectionTimer);
-      globalStationSelectionTimer = setTimeout(() => restoreGlobalStationOption(), 0);
+      globalStationSelectionTimer = setTimeout(() => {
+        if (globalStationSelectionOption === clickedOption) restoreGlobalStationOption();
+      }, 0);
     };
     option.addEventListener("click", globalStationSelectionClickHandler, { once: true });
+    if (restoreOnMouseLeave) {
+      globalStationSelectionMouseLeaveHandler = () => restoreGlobalStationOption();
+      option.addEventListener("mouseleave", globalStationSelectionMouseLeaveHandler, { once: true });
+      globalStationSelectionMouseMoveHandler = (event) => {
+        const sourceRect = globalStationSelectionSourceElement?.getBoundingClientRect();
+        const isWithinSource = sourceRect
+          && event.clientX >= sourceRect.left
+          && event.clientX <= sourceRect.right
+          && event.clientY >= sourceRect.top
+          && event.clientY <= sourceRect.bottom;
+        if (event.target !== option && !option.contains(event.target) && !isWithinSource) {
+          restoreGlobalStationOption();
+        }
+      };
+      document.addEventListener("mousemove", globalStationSelectionMouseMoveHandler, true);
+      return;
+    }
     globalStationSelectionTimer = setTimeout(
       () => restoreGlobalStationOption(true),
       GLOBAL_STATION_SELECTION_ARM_MS,
     );
+  }
+
+  function findVisibleStationOption(name) {
+    const activeTab = popup.querySelector(".tabPage.active") || popup;
+    return [...activeTab.querySelectorAll("a, button")]
+      .find((element) => isNativeStationOption(element)
+        && korailStationKey(element.textContent.trim()) === name
+        && isVisibleElement(element));
+  }
+
+  function findVisiblePopupStationOption(name) {
+    return [...popup.querySelectorAll("a, button")]
+      .filter(isNativeStationOption)
+      .find((element) => korailStationKey(element.textContent.trim()) === name && isVisibleElement(element));
+  }
+
+  function isNativeStationOption(element) {
+    return !element.closest(".korail-station-address-search")
+      && !element.classList.contains("korail-station-map-placeholder");
+  }
+
+  function armNativeStationOption(name, pointerEvent, targetElement = null) {
+    const option = findVisibleStationOption(name);
+    if (!option) return false;
+    highlightIcon(name, true);
+    armGlobalStationOption(option, name, pointerEvent, true, targetElement);
+    return true;
   }
 
   Object.entries(STATIONS).forEach(([name, coords]) => {
@@ -295,10 +380,17 @@ function initStationMap(container, popup, currentDep, currentArr) {
 
     markers[name] = marker
       .bindTooltip(korailDisplayStationName(name), { permanent: false, direction: "top" })
+      .on("mouseover", (event) => {
+        marker.closeTooltip();
+        showHoverMarker(name, true);
+        if (usesHoverStationClick) armNativeStationOption(name, event.originalEvent);
+      })
+      .on("mouseout", () => {
+        if (!usesHoverStationClick) showHoverMarker(name, false);
+      })
       .on("click", (event) => {
-        const activeTab = popup.querySelector(".tabPage.active") || popup;
-        const option = [...activeTab.querySelectorAll("a, button")]
-          .find((a) => korailStationKey(a.textContent.trim()) === name && isVisibleElement(a));
+        const option = findVisibleStationOption(name);
+        if (usesHoverStationClick) return;
         if (usesNativeStationClick) {
           if (!option) return;
           highlightIcon(name, true);
@@ -353,7 +445,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
     if (!matchedStations.length) return;
 
     addressMarker?.remove();
-    matchedStationMarkers.forEach((marker) => marker.remove());
+    clearMatchedStationMarkers();
 
     const addressLabel = document.createElement("span");
     addressLabel.textContent = address;
@@ -367,45 +459,85 @@ function initStationMap(container, popup, currentDep, currentArr) {
     const matchedStationColors = matchedStations.length === 5
       ? ["#0052a4", "#4a85bd", "#4a85bd", "#9cc4e8", "#9cc4e8"]
       : ["#0052a4", "#4a85bd", "#9cc4e8"];
-    matchedStationMarkers = matchedStations.map((station, index) => L.circleMarker([station.lat, station.lng], {
-      radius: 7,
-      color: "#fff",
-      weight: 3,
-      fillColor: matchedStationColors[index] || "#9cc4e8",
-      fillOpacity: 1,
-    }).addTo(map).bindTooltip(`${index + 1}. ${korailDisplayStationName(station.name)}`).on("click", (event) => {
-      const activeTab = popup.querySelector(".tabPage.active") || popup;
-      const option = [...activeTab.querySelectorAll("a, button")]
-        .find((element) => korailStationKey(element.textContent.trim()) === station.name && isVisibleElement(element));
-      if (usesNativeStationClick) {
-        if (!option) return;
-        highlightIcon(station.name, true);
-        armGlobalStationOption(option, station.name, event.originalEvent);
-        return;
+    matchedStationNames = matchedStations.map((station) => station.name);
+    matchedStations.forEach((station, index) => {
+      const marker = markers[station.name];
+      if (!marker) return;
+      if (!map.hasLayer(marker)) {
+        marker.addTo(map);
+        visibleStationNames.add(station.name);
       }
-      option?.click();
-    }));
+      const style = {
+        color: matchedStationColors[index] || "#9cc4e8",
+        radius: 7,
+        weight: 3,
+        rank: index + 1,
+      };
+      matchedStationStyles.set(station.name, style);
+      applyMatchedStationStyle(station.name, style);
+    });
 
-    map.setView([origin.lat, origin.lng], 11, {
+    const matchBounds = L.latLngBounds([
+      [origin.lat, origin.lng],
+      ...matchedStations.map((station) => [STATIONS[station.name].lat, STATIONS[station.name].lng]),
+    ]);
+    map.fitBounds(matchBounds, {
       animate: true,
+      maxZoom: 11,
+      padding: [40, 40],
     });
   }
 
   function highlightMatchedStationMarker(index) {
-    const marker = matchedStationMarkers[index];
-    if (!marker) return;
-    marker.setRadius(10);
-    marker.setStyle({ weight: 4 });
-    marker.bringToFront();
-    marker.openTooltip();
+    const name = matchedStationNames[index];
+    if (!name) return;
+    const marker = markers[name];
+    if (typeof marker?.setStyle === "function" && typeof marker?.setRadius === "function") {
+      marker.setRadius(10);
+      marker.setStyle({ weight: 4 });
+      marker.bringToFront();
+    }
+    marker?.openTooltip();
   }
 
   function resetMatchedStationMarkers() {
-    matchedStationMarkers.forEach((marker) => {
-      marker.setRadius(7);
-      marker.setStyle({ weight: 3 });
-      marker.closeTooltip();
+    matchedStationStyles.forEach((style, name) => {
+      applyMatchedStationStyle(name, style);
+      markers[name]?.closeTooltip();
     });
+  }
+
+  function applyMatchedStationStyle(name, style) {
+    const marker = markers[name];
+    marker?.setTooltipContent?.(`${style.rank}. ${korailDisplayStationName(name)}`);
+    if (typeof marker?.setStyle !== "function" || typeof marker?.setRadius !== "function") return;
+    marker.setRadius(style.radius);
+    marker.setStyle({
+      color: "#fff",
+      weight: style.weight,
+      fillColor: style.color,
+      fillOpacity: 1,
+      opacity: 1,
+    });
+  }
+
+  function clearMatchedStationMarkers() {
+    matchedStationStyles.forEach((style, name) => {
+      const marker = markers[name];
+      marker?.setTooltipContent?.(korailDisplayStationName(name));
+      marker?.closeTooltip();
+      if (typeof marker?.setStyle !== "function" || typeof marker?.setRadius !== "function") return;
+      marker.setRadius(stationMarkerRadius(STATIONS[name]?.major === true));
+      marker.setStyle({
+        color: "#fff",
+        weight: stationMarkerBorderWeight,
+        fillColor: "#888888",
+        fillOpacity: 1,
+        opacity: 1,
+      });
+    });
+    matchedStationNames = [];
+    matchedStationStyles.clear();
   }
 
   function moveToRegionStations(stationNames, animate) {
@@ -433,9 +565,13 @@ function initStationMap(container, popup, currentDep, currentArr) {
   const highlightIcon = (name, on) => {
     const marker = markers[name];
     if (typeof marker?.setStyle === "function" && typeof marker?.setRadius === "function") {
-      const baseRadius = stationMarkerRadius(STATIONS[name]?.major === true);
-      const hoverRadius = stationHoverRadius(STATIONS[name]?.major === true);
-      marker.setStyle({ fillColor: on ? "#f97316" : "#888888" });
+      const matchedStyle = matchedStationStyles.get(name);
+      const baseRadius = matchedStyle?.radius || stationMarkerRadius(STATIONS[name]?.major === true);
+      const hoverRadius = matchedStyle ? 10 : stationHoverRadius(STATIONS[name]?.major === true);
+      marker.setStyle({
+        fillColor: on ? "#f97316" : matchedStyle?.color || "#888888",
+        weight: on && matchedStyle ? 4 : matchedStyle?.weight || stationMarkerBorderWeight,
+      });
       marker.setRadius(on ? hoverRadius : baseRadius);
       return;
     }
@@ -473,7 +609,9 @@ function initStationMap(container, popup, currentDep, currentArr) {
       fillColor: "#f97316",
       fillOpacity: 1,
       opacity: 1,
-    }).addTo(map);
+    }).addTo(map)
+      .bindTooltip(korailDisplayStationName(name), { permanent: false, direction: "top" })
+      .openTooltip();
   };
 
   function attachStationHover(stationList) {
@@ -591,6 +729,67 @@ function initStationMap(container, popup, currentDep, currentArr) {
     const historyToggle = addressSearch.querySelector("[data-station-address-history-toggle]");
     const history = addressSearch.querySelector("[data-station-address-history]");
     const results = addressSearch.querySelector("[data-station-address-results]");
+    const isStationSearchValue = (value) => {
+      const query = String(value || "").trim();
+      return Boolean(STATIONS[korailStationKey(query)] || /^[ㄱ-ㅎ]+$/.test(query));
+    };
+    let addressStationArmRequest = 0;
+    let addressResultsReadyRequest = 0;
+    const restoreAddressSearchInput = () => {
+      const address = input.dataset.korailAddressSearch;
+      if (!address) return;
+      input.value = isGlobalLocale ? korailRomanizeHangul(address) : address;
+    };
+    const armAddressSearchStation = (stationName, pointerEvent, item) => {
+      const request = ++addressStationArmRequest;
+      if (armNativeStationOption(stationName, pointerEvent, item) || isGlobalLocale) return;
+
+      input.value = korailDisplayStationName(stationName);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      submit.click();
+
+      let framesRemaining = 60;
+      const armWhenReady = () => {
+        if (request !== addressStationArmRequest || !popup.isConnected || !item.matches(":hover")) {
+          restoreAddressSearchInput();
+          return;
+        }
+        if (armNativeStationOption(stationName, pointerEvent, item)) {
+          restoreAddressSearchInput();
+          return;
+        }
+        if (framesRemaining-- > 0) requestAnimationFrame(armWhenReady);
+        else restoreAddressSearchInput();
+      };
+      requestAnimationFrame(armWhenReady);
+    };
+    const chooseAddressSearchStation = (stationName) => {
+      const option = findVisiblePopupStationOption(stationName);
+      if (option) {
+        option.click();
+        return;
+      }
+      if (isGlobalLocale) return;
+
+      input.value = korailDisplayStationName(stationName);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      submit.click();
+
+      let framesRemaining = 60;
+      const selectWhenReady = () => {
+        if (!popup.isConnected) return;
+        const searchedOption = findVisiblePopupStationOption(stationName);
+        if (searchedOption) {
+          restoreAddressSearchInput();
+          searchedOption.click();
+        } else if (framesRemaining-- > 0) {
+          requestAnimationFrame(selectWhenReady);
+        } else {
+          restoreAddressSearchInput();
+        }
+      };
+      requestAnimationFrame(selectWhenReady);
+    };
     const setSearchInputValue = (value, searchAddress = value) => {
       input.value = value;
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -605,13 +804,13 @@ function initStationMap(container, popup, currentDep, currentArr) {
         });
       });
     }
-    const renderResults = (stations) => {
+    const renderResults = (stations, revealPointer = null) => {
+      const readyRequest = ++addressResultsReadyRequest;
+      stopAddressResultsPointerWait();
+      results.hidden = true;
       results.replaceChildren();
       results.classList.toggle("korail-station-address-results--five", stations.length === 5);
-      if (!stations.length) {
-        results.hidden = true;
-        return;
-      }
+      if (!stations.length) return;
 
       const label = document.createElement("span");
       label.className = "korail-station-address-results__label";
@@ -619,6 +818,8 @@ function initStationMap(container, popup, currentDep, currentArr) {
       results.appendChild(label);
       const showMajorBadges = includeAllStations.checked;
       const majorBadgeLabel = isGlobalLocale ? "Major" : "주요역";
+      const resultItems = [];
+      let activeResultItem = null;
       stations.forEach((station, index) => {
         const item = document.createElement("button");
         item.type = "button";
@@ -634,34 +835,95 @@ function initStationMap(container, popup, currentDep, currentArr) {
         const meta = document.createElement("span");
         meta.textContent = `🚗 ${station.durationText} · 📍 ${station.distanceText}`;
         item.append(name, meta);
-        item.addEventListener("mouseenter", () => highlightMatchedStationMarker(index));
-        item.addEventListener("mouseleave", resetMatchedStationMarkers);
-        item.addEventListener("click", () => {
-          const options = [...popup.querySelectorAll("a, button")]
-            .filter((element) => !element.closest(".korail-station-address-search"));
-          const option = options.find((element) => {
-            return korailStationKey(element.textContent.trim()) === station.name && isVisibleElement(element);
-          }) || options.find((element) => korailStationKey(element.textContent.trim()) === station.name);
-          option?.click();
+        const activateItem = (pointerEvent = null) => {
+          if (guardedAddressResultItem === item) return;
+          if (activeResultItem === item || globalStationSelectionSourceElement === item) return;
+          activeResultItem = item;
+          highlightMatchedStationMarker(index);
+          if (usesHoverStationClick && STATIONS[station.name]?.major === true) {
+            armAddressSearchStation(station.name, pointerEvent, item);
+          }
+        };
+        item.addEventListener("mouseenter", activateItem);
+        item.addEventListener("mouseleave", () => {
+          if (activeResultItem === item) activeResultItem = null;
+          addressStationArmRequest += 1;
+          resetMatchedStationMarkers();
         });
+        item.addEventListener("click", (event) => {
+          event.preventDefault();
+          if (guardedAddressResultItem === item) {
+            event.stopImmediatePropagation();
+            return;
+          }
+          event.stopPropagation();
+          if (usesHoverStationClick && STATIONS[station.name]?.major === true) return;
+          chooseAddressSearchStation(station.name);
+        }, { capture: true });
         results.appendChild(item);
+        resultItems.push({ item, activateItem });
       });
       results.hidden = false;
+      const pointerGuard = Number.isFinite(revealPointer?.x) && Number.isFinite(revealPointer?.y)
+        ? resultItems.find(({ item }) => {
+          const rect = item.getBoundingClientRect();
+          return revealPointer.x >= rect.left
+            && revealPointer.x <= rect.right
+            && revealPointer.y >= rect.top
+            && revealPointer.y <= rect.bottom;
+        })
+        : null;
+      if (pointerGuard) {
+        guardedAddressResultItem = pointerGuard.item;
+        guardedAddressResultItem.classList.add("is-pointer-guarded");
+        addressResultsPointerMoveHandler = (event) => {
+          if (readyRequest !== addressResultsReadyRequest || !popup.isConnected) {
+            stopAddressResultsPointerWait();
+            return;
+          }
+          const rect = pointerGuard.item.getBoundingClientRect();
+          const movedEnough = Math.hypot(
+            event.clientX - revealPointer.x,
+            event.clientY - revealPointer.y,
+          ) >= 6;
+          const leftItem = event.clientX < rect.left
+            || event.clientX > rect.right
+            || event.clientY < rect.top
+            || event.clientY > rect.bottom;
+          if (!movedEnough && !leftItem) return;
+          stopAddressResultsPointerWait();
+          if (!leftItem) pointerGuard.activateItem(event);
+        };
+        document.addEventListener("pointermove", addressResultsPointerMoveHandler, {
+          capture: true,
+          passive: true,
+        });
+        return;
+      }
+      requestAnimationFrame(() => {
+        if (readyRequest !== addressResultsReadyRequest || !popup.isConnected) return;
+        resultItems.find(({ item }) => item.matches(":hover"))?.activateItem();
+      });
     };
-    const matchAddress = async (addressValue = input.dataset.korailAddressSearch || input.value) => {
+    const matchAddress = async (
+      addressValue = input.dataset.korailAddressSearch || input.value,
+      revealPointer = null,
+    ) => {
       const address = String(addressValue).trim();
-      const isStationSearch = STATIONS[korailStationKey(address)] || /^[ㄱ-ㅎ]+$/.test(address);
-      if (!address || isStationSearch || stationSearchRow.dataset.busy === "true") return;
+      if (!address || isStationSearchValue(address) || stationSearchRow.dataset.busy === "true") return;
 
       stationSearchRow.dataset.busy = "true";
       submit.disabled = true;
+      results.hidden = true;
       try {
         const match = await window.KORAIL_HOME?.findNearestStationMatch?.(address, includeAllStations.checked);
         if (match?.origin && match.stations?.length) {
           const displayAddress = isGlobalLocale ? korailRomanizeHangul(address) : address;
-          if (input.value !== displayAddress) setSearchInputValue(displayAddress, address);
-          renderResults(match.stations);
+          if (input.value !== displayAddress || input.dataset.korailAddressSearch !== address) {
+            setSearchInputValue(displayAddress, address);
+          }
           showAddressStationMatch(displayAddress, match.origin, match.stations);
+          renderResults(match.stations, revealPointer);
         }
       } catch (error) {
         console.warn("[Korail] Address station matching failed:", error);
@@ -671,12 +933,18 @@ function initStationMap(container, popup, currentDep, currentArr) {
       }
     };
 
-    submit.addEventListener("click", () => matchAddress());
+    submit.addEventListener("click", (event) => {
+      if (isStationSearchValue(input.value)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      matchAddress();
+    }, { capture: true });
     input.addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
       event.preventDefault();
-      submit.click();
-    });
+      event.stopPropagation();
+      matchAddress();
+    }, { capture: true });
     currentLocation.addEventListener("click", async () => {
       if (currentLocation.disabled) return;
       currentLocation.disabled = true;
@@ -745,12 +1013,15 @@ function initStationMap(container, popup, currentDep, currentArr) {
         option.className = "korail-nearest-history__option";
         option.textContent = entry.includeAllStations ? text.includeAllStations : text.majorStationsOnly;
         select.append(address, option);
-        select.addEventListener("click", () => {
+        select.addEventListener("click", (event) => {
+          const revealPointer = event.detail > 0
+            ? { x: event.clientX, y: event.clientY }
+            : null;
           setSearchInputValue(displayAddress, entry.address);
           includeAllStations.checked = entry.includeAllStations === true;
           history.hidden = true;
           historyToggle.setAttribute("aria-expanded", "false");
-          matchAddress();
+          matchAddress(undefined, revealPointer);
         });
         item.append(remove, select);
         history.appendChild(item);
@@ -870,6 +1141,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
   showMajorStations();
   attachTabEvents();
   addAddressStationSearch();
+  if (usesHoverStationClick) map.on("movestart", restoreGlobalStationOption);
 
   let tabUpdateFrame = 0;
   const tabObserver = new MutationObserver((records) => {
@@ -891,7 +1163,9 @@ function initStationMap(container, popup, currentDep, currentArr) {
     if (disposed) return;
     disposed = true;
     clearTimeout(invalidateTimer);
+    stopAddressResultsPointerWait();
     restoreGlobalStationOption();
+    if (usesHoverStationClick) map.off("movestart", restoreGlobalStationOption);
     if (tabUpdateFrame) cancelAnimationFrame(tabUpdateFrame);
     tabObserver.disconnect();
     map.remove();
