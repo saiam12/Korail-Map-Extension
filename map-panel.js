@@ -162,7 +162,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
   );
   const isGlobalLocale = window.KORAIL_I18N?.getLocale?.() !== "ko";
   const isGlobalMainPage = isGlobalLocale && /^\/global\/[^/]+\/main\/?$/i.test(location.pathname);
-  const usesHoverStationClick = !isGlobalLocale;
+  const usesHoverStationClick = true;
   const usesNativeStationClick = (isGlobalLocale && !isGlobalMainPage) || usesHoverStationClick;
   const map = L.map(container, {
     maxBounds: koreaBounds,
@@ -791,14 +791,14 @@ function initStationMap(container, popup, currentDep, currentArr) {
       requestAnimationFrame(selectWhenReady);
     };
     const setSearchInputValue = (value, searchAddress = value) => {
+      input.dataset.korailAddressSearch = searchAddress;
       input.value = value;
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dataset.korailAddressSearch = searchAddress;
     };
     if (isGlobalLocale) {
       input.addEventListener("input", (event) => {
         if (event.isTrusted) delete input.dataset.korailAddressSearch;
-        const query = input.value.trim().toLowerCase();
+        const query = input.dataset.korailAddressSearch ? "" : input.value.trim().toLowerCase();
         popup.querySelectorAll(".travel-ch_list .ch_tag").forEach((tag) => {
           tag.hidden = Boolean(query) && !tag.textContent.trim().toLowerCase().includes(query);
         });
