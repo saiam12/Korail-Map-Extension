@@ -1,6 +1,6 @@
 # Korail Route Map & Station Guide 개인정보처리방침
 
-최종 업데이트: 2026-07-21
+최종 업데이트: 2026-08-09
 
 Korail Route Map & Station Guide(이하 "확장 프로그램")는 Korail 웹사이트에서 열차 검색 결과와 정차역 지도를 표시합니다. 이 문서는 확장 프로그램이 처리하는 정보를 설명합니다.
 
@@ -8,8 +8,9 @@ Korail Route Map & Station Guide(이하 "확장 프로그램")는 Korail 웹사�
 
 | 정보 | 목적 | 처리 위치 및 보관 |
 | --- | --- | --- |
-| 사용자가 입력한 출발지 주소 또는 장소명 | 가까운 역 및 경로 검색 | 지오코딩 요청 시 Cloudflare Worker와 Naver Maps API에 전송합니다. 주소 검색 결과가 없으면 Naver 지역 검색 API에 장소명을 전송합니다. 가까운 역 검색 기록은 마지막 이용 후 7일 동안 기기에 저장되며, 이후 캐시에 접근할 때 만료 항목을 삭제합니다. |
-| 사용자가 허용한 현재 위치 좌표 | 현재 위치의 주소 확인 및 경로 검색 | 요청할 때만 Cloudflare Worker와 Naver Maps API에 전송합니다. 확장 프로그램에는 저장하지 않습니다. |
+| 사용자가 입력한 출발지 주소 또는 장소명 | 가까운 역 및 경로 검색 | 지오코딩 요청 시 Cloudflare Worker와 Naver Maps API에 전송합니다. 주소 검색 결과가 없으면 Naver 지역 검색 API에 장소명을 전송합니다. 변환된 출발지 좌표와 후보 역 좌표는 대중교통 시간 조회를 위해 Cloudflare Worker와 Kakao Maps API에 전송합니다. 검색 기록, 변환 좌표 및 경로 결과는 마지막 이용 후 24시간 동안 기기에 저장되며, 이후 캐시에 접근할 때 만료 항목을 삭제합니다. |
+| 사용자가 허용한 현재 위치 좌표 | 현재 위치의 주소 확인 및 경로 검색 | 요청할 때 Cloudflare Worker와 Naver Maps API에 전송합니다. 해당 주소로 가까운 역 검색을 실행하면 변환 좌표가 위 검색 캐시에 포함되고, 대중교통 시간 조회를 위해 Kakao Maps API에 전송됩니다. |
+| 확장 프로그램 설치 식별자 및 API 요청 IP 주소 | 지도 API 오남용 방지와 요청 횟수 제한 | 설치 식별자는 기기에 생성·저장해 지도 API 요청 시 Cloudflare Worker에 전송합니다. 요청 IP 주소는 Cloudflare가 요청 처리와 제한에 사용하며 확장 프로그램에는 저장하지 않습니다. |
 | 문의 내용, 선택 입력 연락처, 현재 Korail 페이지 경로 및 언어 | 문의 접수 및 회신 | 사용자가 문의 전송을 선택할 때 쿼리와 해시를 제외한 Korail 페이지 경로를 Formspree에 전송합니다. |
 | 지도 타일 요청 정보(IP 주소 및 표시 영역에 해당하는 타일 좌표) | 배경 지도 표시 | CARTO 지도 타일 서버에 요청되며 확장 프로그램에는 저장하지 않습니다. |
 
@@ -17,6 +18,7 @@ Korail Route Map & Station Guide(이하 "확장 프로그램")는 Korail 웹사�
 
 - Cloudflare Workers: 지도 API 프록시와 요청 제한
 - Naver Cloud Platform Maps 및 Naver 지역 검색 API: 주소·장소·경로 지도 API
+- Kakao Maps API: 출발지에서 후보 역까지의 대중교통 예상 시간
 - Formspree: 사용자가 전송한 확장 프로그램 문의
 - CARTO: 배경 지도 타일
 

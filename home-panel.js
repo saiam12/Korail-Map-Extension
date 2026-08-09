@@ -10,10 +10,11 @@ waitForL(() => {
     isVisibleFullMenuOpen,
   } = window.KORAIL_SHARED;
   const nearestSearchCache = new Map();
+  const nearestSearchCacheCalculatedAt = new Map();
   const nearestSearchOrigins = new Map();
   const pendingNearestSearches = new Map();
   const nearestSearchTimestamps = [];
-  const nearestCacheTtlMs = 7 * 24 * 60 * 60 * 1000;
+  const nearestCacheTtlMs = 24 * 60 * 60 * 1000;
   const nearestSearchWindowMs = 60 * 1000;
   const nearestSearchLimit = 5;
   let homePanelLayoutCleanup = () => {};
@@ -493,7 +494,7 @@ waitForL(() => {
     if (btn) btn.style.display = "none";
   } 
 
-  // 네이버 API 설정 값을 읽습니다.
+  // 지도 API 설정 값을 읽습니다.
 
   // HTML 삽입 전에 특수 문자를 이스케이프합니다.
 
@@ -508,18 +509,18 @@ waitForL(() => {
 
   // API 오류 메시지를 포맷합니다.
 
-  function buildGoogleApiError(message) {
+  function buildMapsApiError(message) {
     return message || "API 요청에 실패했습니다.";
   }
 
-  // content script를 통해 백그라운드에 네이버 API 요청을 보냅니다.
+  // content script를 통해 백그라운드에 지도 API 요청을 보냅니다.
 
-  function requestNaverApi(kind, payload) {
+  function requestMapsApi(kind, payload) {
     return new Promise((resolve, reject) => {
       const requestId = `korail-map-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const timeoutId = setTimeout(() => {
         window.removeEventListener("message", handleResponse);
-        reject(new Error("Naver API 응답 시간이 초과되었습니다."));
+        reject(new Error("지도 API 응답 시간이 초과되었습니다."));
       }, 12000);
 
       function handleResponse(event) {
@@ -533,7 +534,7 @@ waitForL(() => {
         } else {
           const error = new Error(response.status === 429
             ? (getKorailLocale() === "ko" ? "API 요청이 너무 많습니다. 1분 후 다시 시도해주세요." : "Too many API requests. Try again in one minute.")
-            : buildGoogleApiError(response.error || "Naver API 요청에 실패했습니다."));
+            : buildMapsApiError(response.error || "지도 API 요청에 실패했습니다."));
           error.status = response.status;
           reject(error);
         }
@@ -588,6 +589,7 @@ waitForL(() => {
 
   async function clearNearestSearchCache() {
     nearestSearchCache.clear();
+    nearestSearchCacheCalculatedAt.clear();
     nearestSearchOrigins.clear();
     await requestNearestCache("clear");
   }
@@ -660,17 +662,21 @@ waitForL(() => {
     }
 
     const showMajorBadges = panel.querySelector("[data-nearest-include-all]")?.checked === true;
+    const sortMode = normalizeNearestSortMode(panel.querySelector("[data-nearest-sort-mode]")?.value);
+    const sortLabel = sortMode === "transit" ? t("sortTransit") : t("sortDriving");
     const majorBadgeLabel = isKoreanLocale() ? "주요역" : "Major";
     const departureLabel = isKoreanLocale() ? "출발" : "Departure";
     const arrivalLabel = isKoreanLocale() ? "도착" : "Arrival";
     result.innerHTML = `
-      <span class="korail-nearest-card__result-label">TOP ${stations.length}</span>
+      <span class="korail-nearest-card__result-label">${escapeHtml(sortLabel)} · TOP ${stations.length}</span>
       <ol class="korail-nearest-list">
         ${stations.map((station, index) => `
           <li>
             <span class="korail-nearest-list__rank">${index + 1}</span>
-            <span class="korail-nearest-list__name">${escapeHtml(stationName(station.name))}${showMajorBadges && STATIONS[station.name]?.major === true ? `<span class="korail-nearest-list__major">${majorBadgeLabel}</span>` : ""}</span>
-            <span class="korail-nearest-list__meta">🚗 ${station.durationText} · 📍 ${station.distanceText}</span>
+            <span class="korail-nearest-list__name"><span class="korail-nearest-list__name-text">${escapeHtml(stationName(station.name))}</span>${showMajorBadges && STATIONS[station.name]?.major === true ? `<span class="korail-nearest-list__major">${majorBadgeLabel}</span>` : ""}<span class="korail-nearest-list__distance">📍${escapeHtml(station.distanceText)}</span></span>
+            <span class="korail-nearest-list__meta">
+              <span class="korail-nearest-list__times">🚗 ${station.durationText ? escapeHtml(station.durationText) : escapeHtml(t("unavailable"))}${station.transitDurationText ? " · 🚌 " + escapeHtml(station.transitDurationText) : ""}</span>
+            </span>
             <span class="korail-nearest-list__actions">
               <button type="button" class="korail-nearest-list__station-button" data-nearest-station-select data-nearest-station-type="dep" data-nearest-station-name="${escapeHtml(stationName(station.name))}">${departureLabel}</button>
               <button type="button" class="korail-nearest-list__station-button" data-nearest-station-select data-nearest-station-type="arr" data-nearest-station-name="${escapeHtml(stationName(station.name))}">${arrivalLabel}</button>
@@ -685,7 +691,7 @@ waitForL(() => {
   // 주소를 좌표로 변환합니다.
 
   async function geocodeAddress(address) {
-    const data = await requestNaverApi("locationGeocode", { address });
+    const data = await requestMapsApi("locationGeocode", { address });
     if (!data[0]) throw new Error(t("geocodeNotFound"));
     return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
   }
@@ -709,7 +715,7 @@ waitForL(() => {
   }
 
   async function reverseGeocodeLocation({ lat, lng }) {
-    const data = await requestNaverApi("locationReverse", {
+    const data = await requestMapsApi("locationReverse", {
       lat,
       lng,
       language: isKoreanLocale() ? "kor" : "eng",
@@ -725,19 +731,36 @@ waitForL(() => {
   async function fillCurrentLocation(panel) {
     const input = panel.querySelector("[data-nearest-address]");
     const button = panel.querySelector("[data-nearest-current-location]");
-    if (!input || !button) return;
+    if (!input || !button
+      || panel.dataset.nearestSearchBusy === "true"
+      || panel.dataset.nearestLocationBusy === "true") return;
 
-    button.disabled = true;
+    panel.dataset.nearestLocationBusy = "true";
+    const lockedControls = Array.from(panel.querySelectorAll([
+      "[data-nearest-address]",
+      "[data-nearest-submit]",
+      "[data-nearest-include-all]",
+      "[data-nearest-sort-mode]",
+      "[data-nearest-current-location]",
+      "[data-nearest-history-toggle]",
+    ].join(",")));
+    const previousDisabledStates = lockedControls.map((control) => control.disabled);
+    lockedControls.forEach((control) => { control.disabled = true; });
     button.querySelector("[data-nearest-location-label]").textContent = t("locating");
+    let shouldFocusInput = false;
     try {
       const address = await getCurrentLocationAddress();
       input.value = address;
-      input.focus();
+      shouldFocusInput = true;
     } catch (error) {
       renderNearestResults(panel, "error", t("locationUnavailable"));
     } finally {
-      button.disabled = false;
+      delete panel.dataset.nearestLocationBusy;
+      lockedControls.forEach((control, index) => {
+        control.disabled = previousDisabledStates[index];
+      });
       button.querySelector("[data-nearest-location-label]").textContent = t("useCurrentLocation");
+      (shouldFocusInput ? input : button).focus();
     }
   }
 
@@ -749,6 +772,7 @@ waitForL(() => {
         const distanceMeters = getDistanceMeters(origin, station);
         return {
           ...station,
+          straightDistanceMeters: distanceMeters,
           distanceMeters,
           distanceText: formatDistance(distanceMeters),
         };
@@ -760,126 +784,325 @@ waitForL(() => {
   function formatCachedNearestResults(results) {
     return results.map((station) => ({
       ...station,
-      durationText: formatDuration(station.durationSeconds),
-      distanceText: formatDistance(station.distanceMeters),
+      durationText: Number.isFinite(station.durationSeconds)
+        ? formatDuration(station.durationSeconds)
+        : "",
+      transitDurationText: Number.isFinite(station.transitDurationSeconds)
+        ? formatDuration(station.transitDurationSeconds)
+        : "",
+      distanceText: Number.isFinite(station.distanceMeters)
+        ? formatDistance(station.distanceMeters)
+        : "",
     }));
   }
 
-  // 현재 위치에서 각 역까지의 길찾기 요약 정보를 조회합니다.
+  // 현재 위치에서 각 역까지의 자동차 길찾기 요약 정보를 조회합니다.
 
-  async function getRoutesInfo(origin, stations) {
-    let lastError = null;
-    const results = [];
+  function hasResolvedDrivingRoute(station) {
+    return station.drivingAvailable === false
+      || (station.drivingAvailable === true
+        && Number.isFinite(station.durationSeconds)
+        && station.durationSeconds > 0);
+  }
 
-    for (const station of stations) {
+  async function addDrivingRouteInfo(origin, stations) {
+    const results = stations.slice();
+
+    for (const [index, station] of stations.entries()) {
+      if (hasResolvedDrivingRoute(station)) continue;
+      const payload = {
+        startLat: origin.lat,
+        startLng: origin.lng,
+        goalLat: station.lat,
+        goalLng: station.lng,
+      };
       try {
-        const drivingData = await requestNaverApi("driving", { startLat: origin.lat, startLng: origin.lng, goalLat: station.lat, goalLng: station.lng });
+        const drivingData = await requestMapsApi("driving", payload);
         const drivingSummary = drivingData.route?.trafast?.[0]?.summary;
-        if (!drivingSummary) continue;
-        results.push({
+        if (!drivingSummary) {
+          const responseCode = Number(drivingData.code);
+          if (drivingData.available === false
+            || (Number.isInteger(responseCode) && responseCode >= 1 && responseCode <= 5)) {
+            results[index] = { ...station, drivingAvailable: false };
+          }
+          continue;
+        }
+        results[index] = {
           ...station,
+          drivingAvailable: true,
           durationSeconds: drivingSummary.duration / 1000,
           durationText: formatDuration(drivingSummary.duration / 1000),
           distanceText: formatDistance(drivingSummary.distance),
           distanceMeters: drivingSummary.distance,
-        });
+        };
       } catch (error) {
-        lastError = error;
         console.warn("[Korail] Naver driving request failed:", station.name, error);
-        if (error.status === 429) throw error;
+        if (error?.status === 429) {
+          error.partialResults = results;
+          throw error;
+        }
       }
     }
-
-    if (!results.length && lastError) throw lastError;
     return results;
+  }
+
+  // 화면에 표시할 역에만 대중교통 시간을 추가합니다.
+
+  function hasResolvedTransitRoute(station) {
+    return station.transitAvailable === false
+      || (station.transitAvailable === true
+        && Number.isFinite(station.transitDurationSeconds)
+        && station.transitDurationSeconds > 0);
+  }
+
+  async function addTransitRouteInfo(origin, stations) {
+    const pendingStations = stations
+      .map((station, index) => ({ station, index }))
+      .filter(({ station }) => !hasResolvedTransitRoute(station));
+    if (!pendingStations.length) return stations;
+
+    const settled = await Promise.allSettled(pendingStations.map(({ station }) => requestMapsApi("transit", {
+      startLat: origin.lat,
+      startLng: origin.lng,
+      goalLat: station.lat,
+      goalLng: station.lng,
+    })));
+    const results = stations.slice();
+
+    pendingStations.forEach(({ station, index }, pendingIndex) => {
+      const transitResult = settled[pendingIndex];
+      if (transitResult.status === "rejected") {
+        console.warn("[Korail] Kakao transit request failed:", station.name, transitResult.reason);
+        return;
+      }
+      if (transitResult.value?.available === false) {
+        results[index] = { ...station, transitAvailable: false };
+        return;
+      }
+      const transitDurationSeconds = Number(transitResult.value?.durationSeconds);
+      if (!Number.isFinite(transitDurationSeconds) || transitDurationSeconds <= 0) return;
+      results[index] = {
+        ...station,
+        transitAvailable: true,
+        transitDurationSeconds,
+        transitDurationText: formatDuration(transitDurationSeconds),
+      };
+    });
+    return results;
+  }
+
+  function normalizeNearestSortMode(sortMode) {
+    return sortMode === "transit" ? "transit" : "driving";
+  }
+
+  function compareOptionalDuration(left, right) {
+    const leftValue = Number.isFinite(left) ? left : Infinity;
+    const rightValue = Number.isFinite(right) ? right : Infinity;
+    if (leftValue === rightValue) return 0;
+    return leftValue - rightValue;
+  }
+
+  function sortNearestResults(stations, sortMode) {
+    const normalizedSortMode = normalizeNearestSortMode(sortMode);
+    return stations.slice().sort((left, right) => {
+      const primary = normalizedSortMode === "transit"
+        ? compareOptionalDuration(left.transitDurationSeconds, right.transitDurationSeconds)
+        : compareOptionalDuration(left.durationSeconds, right.durationSeconds);
+      if (primary) return primary;
+      const driving = compareOptionalDuration(left.durationSeconds, right.durationSeconds);
+      if (driving) return driving;
+      const distance = compareOptionalDuration(left.straightDistanceMeters, right.straightDistanceMeters);
+      if (distance) return distance;
+      return String(left.name).localeCompare(String(right.name), "ko");
+    });
+  }
+
+  function mergeNearestRouteResults(stations, updates) {
+    const updatesByName = new Map(updates.map((station) => [station.name, station]));
+    return stations.map((station) => updatesByName.get(station.name) || station);
+  }
+
+  async function prepareNearestResults(origin, stations, sortMode, resultLimit) {
+    const normalizedSortMode = normalizeNearestSortMode(sortMode);
+    let allResults;
+    try {
+      allResults = await addDrivingRouteInfo(origin, stations);
+    } catch (error) {
+      return {
+        allResults: Array.isArray(error?.partialResults) ? error.partialResults : stations,
+        visibleResults: [],
+        error,
+      };
+    }
+    let preparationError = null;
+    if (normalizedSortMode === "transit") {
+      allResults = await addTransitRouteInfo(origin, allResults);
+      if (allResults.some((station) => !hasResolvedTransitRoute(station))) {
+        preparationError = new Error(t("transitUnavailable"));
+      } else if (!allResults.some((station) => Number.isFinite(station.transitDurationSeconds))) {
+        preparationError = new Error(t("transitUnavailable"));
+      }
+    } else {
+      if (allResults.some((station) => !hasResolvedDrivingRoute(station))) {
+        preparationError = new Error(t("drivingUnavailable"));
+      }
+      const drivingTop = sortNearestResults(allResults, "driving")
+        .filter((station) => Number.isFinite(station.durationSeconds))
+        .slice(0, resultLimit);
+      if (!drivingTop.length) preparationError = new Error(t("drivingUnavailable"));
+      if (!preparationError) {
+        const drivingTopWithTransit = await addTransitRouteInfo(origin, drivingTop);
+        allResults = mergeNearestRouteResults(allResults, drivingTopWithTransit);
+      }
+    }
+    const visibleResults = sortNearestResults(allResults, normalizedSortMode)
+      .filter((station) => normalizedSortMode === "transit"
+        ? Number.isFinite(station.transitDurationSeconds)
+        : Number.isFinite(station.durationSeconds))
+      .slice(0, resultLimit);
+    return {
+      allResults,
+      visibleResults,
+      error: preparationError,
+    };
   }
 
   // 입력 주소 기준 가까운 주요 역 검색을 실행합니다.
 
-  async function findNearestStationResults(address, includeAllStations = false) {
+  async function findNearestStationResults(address, includeAllStations = false, sortMode = "driving") {
     const normalizedAddress = String(address || "").trim().replace(/([가-힣])\s+(\d+(길|로|가))/g, "$1$2");
     if (!normalizedAddress) throw new Error(t("enterAddressError"));
 
+    const normalizedSortMode = normalizeNearestSortMode(sortMode);
     const candidateLimit = includeAllStations ? 8 : 5;
     const resultLimit = includeAllStations ? 5 : 3;
     const cacheKey = getNearestSearchCacheKey(normalizedAddress, includeAllStations);
-    const cachedResults = nearestSearchCache.get(cacheKey);
-    if (cachedResults) {
-      const origin = nearestSearchOrigins.get(cacheKey);
-      await requestNearestCache("set", cacheKey, {
-        savedAt: Date.now(),
-        address: normalizedAddress,
-        includeAllStations,
-        origin,
-        results: cachedResults,
-      }).catch(() => null);
-      return cachedResults.slice(0, resultLimit);
-    }
     if (pendingNearestSearches.has(cacheKey)) {
-      const results = await pendingNearestSearches.get(cacheKey);
-      return results.slice(0, resultLimit);
+      const pendingSearch = pendingNearestSearches.get(cacheKey);
+      try {
+        await pendingSearch;
+      } catch {
+        // The pending request may use another sort mode. Re-enter with its partial cache.
+      }
+      if (pendingNearestSearches.get(cacheKey) === pendingSearch) pendingNearestSearches.delete(cacheKey);
+      return findNearestStationResults(normalizedAddress, includeAllStations, normalizedSortMode);
     }
 
     const search = (async () => {
-      const stored = await requestNearestCache("get", cacheKey).catch(() => null);
-      if (stored && Date.now() - stored.savedAt <= nearestCacheTtlMs && Array.isArray(stored.results)) {
-        const storedResults = formatCachedNearestResults(stored.results);
-        const origin = Number.isFinite(stored.origin?.lat) && Number.isFinite(stored.origin?.lng)
-          ? stored.origin
-          : null;
-        nearestSearchCache.set(cacheKey, storedResults);
-        if (origin) nearestSearchOrigins.set(cacheKey, origin);
+      const cachedResults = nearestSearchCache.get(cacheKey);
+      const cachedCalculatedAt = nearestSearchCacheCalculatedAt.get(cacheKey);
+      const cachedOrigin = nearestSearchOrigins.get(cacheKey);
+      if (cachedResults
+        && Number.isFinite(cachedCalculatedAt)
+        && cachedCalculatedAt <= Date.now()
+        && Date.now() - cachedCalculatedAt <= nearestCacheTtlMs
+        && Number.isFinite(cachedOrigin?.lat)
+        && Number.isFinite(cachedOrigin?.lng)) {
+        const origin = cachedOrigin;
+        const prepared = await prepareNearestResults(origin, cachedResults, normalizedSortMode, resultLimit);
+        nearestSearchCache.set(cacheKey, prepared.allResults);
+        nearestSearchCacheCalculatedAt.set(cacheKey, cachedCalculatedAt);
         await requestNearestCache("set", cacheKey, {
           savedAt: Date.now(),
+          calculatedAt: cachedCalculatedAt,
           address: normalizedAddress,
           includeAllStations,
+          sortMode: normalizedSortMode,
           origin,
-          results: storedResults,
+          results: prepared.allResults,
         }).catch(() => null);
-        return storedResults;
+        if (prepared.error) throw prepared.error;
+        return prepared.visibleResults;
+      }
+      nearestSearchCache.delete(cacheKey);
+      nearestSearchCacheCalculatedAt.delete(cacheKey);
+      nearestSearchOrigins.delete(cacheKey);
+
+      const stored = await requestNearestCache("get", cacheKey).catch(() => null);
+      const storedCalculatedAt = Number.isFinite(stored?.calculatedAt) ? stored.calculatedAt : stored?.savedAt;
+      const storedOrigin = Number.isFinite(stored?.origin?.lat) && Number.isFinite(stored?.origin?.lng)
+        ? stored.origin
+        : null;
+      if (stored
+        && Number.isFinite(storedCalculatedAt)
+        && storedCalculatedAt <= Date.now()
+        && Date.now() - storedCalculatedAt <= nearestCacheTtlMs
+        && Array.isArray(stored.results)
+        && storedOrigin) {
+        const storedResults = formatCachedNearestResults(stored.results);
+        const origin = storedOrigin;
+        const prepared = await prepareNearestResults(origin, storedResults, normalizedSortMode, resultLimit);
+        nearestSearchCache.set(cacheKey, prepared.allResults);
+        nearestSearchCacheCalculatedAt.set(cacheKey, storedCalculatedAt);
+        nearestSearchOrigins.set(cacheKey, origin);
+        await requestNearestCache("set", cacheKey, {
+          savedAt: Date.now(),
+          calculatedAt: storedCalculatedAt,
+          address: normalizedAddress,
+          includeAllStations,
+          sortMode: normalizedSortMode,
+          origin,
+          results: prepared.allResults,
+        }).catch(() => null);
+        if (prepared.error) throw prepared.error;
+        return prepared.visibleResults;
       }
 
       consumeNearestSearchQuota();
       const origin = await geocodeAddress(normalizedAddress);
       const candidateStations = getNearestByDistance(origin, candidateLimit, includeAllStations);
-      const results = await getRoutesInfo(origin, candidateStations);
-      if (!results.length) throw new Error("Naver Direction 결과를 가져오지 못했습니다.");
-      results.sort((a, b) => a.durationSeconds - b.durationSeconds);
-      const savedResults = results.map((station) => ({ ...station }));
+      const prepared = await prepareNearestResults(origin, candidateStations, normalizedSortMode, resultLimit);
+      const savedResults = prepared.allResults.map((station) => ({ ...station }));
+      const calculatedAt = Date.now();
       nearestSearchCache.set(cacheKey, savedResults);
+      nearestSearchCacheCalculatedAt.set(cacheKey, calculatedAt);
       nearestSearchOrigins.set(cacheKey, origin);
       await requestNearestCache("set", cacheKey, {
         savedAt: Date.now(),
+        calculatedAt,
         address: normalizedAddress,
         includeAllStations,
+        sortMode: normalizedSortMode,
         origin,
         results: savedResults,
       }).catch(() => null);
-      return savedResults;
+      if (prepared.error) throw prepared.error;
+      return prepared.visibleResults;
     })();
 
     pendingNearestSearches.set(cacheKey, search);
     try {
-      const results = await search;
-      return results.slice(0, resultLimit);
+      return await search;
     } finally {
-      pendingNearestSearches.delete(cacheKey);
+      if (pendingNearestSearches.get(cacheKey) === search) pendingNearestSearches.delete(cacheKey);
     }
   }
 
   async function searchNearestStations(panel) {
     const input = panel.querySelector("[data-nearest-address]");
     const submit = panel.querySelector("[data-nearest-submit], button[type='submit']");
-    if (panel.dataset.nearestSearchBusy === "true") return;
+    const sortSelect = panel.querySelector("[data-nearest-sort-mode]");
+    if (panel.dataset.nearestSearchBusy === "true" || panel.dataset.nearestLocationBusy === "true") return;
     panel.dataset.nearestSearchBusy = "true";
+    const lockedControls = Array.from(panel.querySelectorAll([
+      "[data-nearest-address]",
+      "[data-nearest-include-all]",
+      "[data-nearest-sort-mode]",
+      "[data-nearest-current-location]",
+      "[data-nearest-history-toggle]",
+    ].join(",")));
+    const previousDisabledStates = lockedControls.map((control) => control.disabled);
+    lockedControls.forEach((control) => { control.disabled = true; });
     if (submit) submit.disabled = true;
+    const sortMode = sortSelect?.value;
     const startedAt = Date.now();
     const minimumLoadingMs = 500 + Math.floor(Math.random() * 501);
+    let shouldFocusEmptyAddress = false;
     try {
       renderNearestResults(panel, "loading", t("calculating"));
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const includeAllStations = panel.querySelector("[data-nearest-include-all]")?.checked === true;
-      const results = await findNearestStationResults(input?.value, includeAllStations);
+      const results = await findNearestStationResults(input?.value, includeAllStations, sortMode);
       const remainingLoadingMs = minimumLoadingMs - (Date.now() - startedAt);
       if (remainingLoadingMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, remainingLoadingMs));
@@ -887,10 +1110,22 @@ waitForL(() => {
       renderNearestResults(panel, "done", t("nearestStations"), results);
     } catch (error) {
       renderNearestResults(panel, "error", error.message || t("searchError"));
-      if (!input?.value.trim()) input?.focus();
+      shouldFocusEmptyAddress = !input?.value.trim();
     } finally {
       delete panel.dataset.nearestSearchBusy;
       if (submit) submit.disabled = false;
+      lockedControls.forEach((control, index) => {
+        control.disabled = previousDisabledStates[index];
+      });
+      if (panel.dataset.nearestFocusSortAfterSearch === "true") {
+        delete panel.dataset.nearestFocusSortAfterSearch;
+        sortSelect?.focus();
+      } else if (panel.dataset.nearestFocusAddressAfterSearch === "true") {
+        delete panel.dataset.nearestFocusAddressAfterSearch;
+        input?.focus();
+      } else if (shouldFocusEmptyAddress) {
+        input?.focus();
+      }
     }
   }
 
@@ -946,9 +1181,10 @@ waitForL(() => {
 
       const option = document.createElement("span");
       option.className = "korail-nearest-history__option";
-      option.textContent = getKorailLocale() === "ko"
+      const stationScope = getKorailLocale() === "ko"
         ? (entry.includeAllStations ? "일반역 포함" : "주요역만")
         : (entry.includeAllStations ? "All stations" : "Major only");
+      option.textContent = stationScope;
 
       select.append(address, option);
       item.append(remove, select);
@@ -983,6 +1219,7 @@ waitForL(() => {
     panel.dataset.nearestHistoryBound = "true";
     panel.querySelector("[data-nearest-history-toggle]")?.addEventListener("click", () => toggleNearestHistory(panel));
     panel.querySelector("[data-nearest-history]")?.addEventListener("click", async (event) => {
+      if (panel.dataset.nearestSearchBusy === "true" || panel.dataset.nearestLocationBusy === "true") return;
       const remove = event.target.closest("[data-history-remove]");
       if (remove) {
         remove.disabled = true;
@@ -1005,8 +1242,8 @@ waitForL(() => {
       if (input) input.value = item.dataset.address || "";
       if (includeAll) includeAll.checked = item.dataset.includeAll === "true";
       closeNearestHistory(panel);
+      panel.dataset.nearestFocusAddressAfterSearch = "true";
       panel.querySelector("form")?.requestSubmit();
-      input?.focus();
     });
   }
 
@@ -1035,6 +1272,14 @@ waitForL(() => {
       event.preventDefault();
       searchNearestStations(panel);
     });
+    panel.querySelector("[data-nearest-sort-mode]")?.addEventListener("change", () => {
+      const result = panel.querySelector("[data-nearest-result]");
+      const address = panel.querySelector("[data-nearest-address]")?.value.trim();
+      if (["done", "error"].includes(result?.dataset.state) && address) {
+        panel.dataset.nearestFocusSortAfterSearch = "true";
+        form?.requestSubmit();
+      }
+    });
     panel.querySelector("[data-nearest-current-location]")?.addEventListener("click", () => fillCurrentLocation(panel));
     bindNearestHistory(panel);
     bindNearestStationActions(panel);
@@ -1060,7 +1305,7 @@ waitForL(() => {
           <div id="korail-nearest-history" class="korail-nearest-history" data-nearest-history hidden></div>
           <div class="korail-nearest-search__row">
             <input id="korail-nearest-address" data-nearest-address type="text" placeholder="${t("addressPlaceholder")}" autocomplete="street-address">
-            <button type="submit" class="korail-nearest-card__button">${t("search")}</button>
+            <button type="submit" class="korail-nearest-card__button" data-nearest-submit>${t("search")}</button>
           </div>
           <div class="korail-nearest-search__options">
             <label class="korail-nearest-search__toggle">
@@ -1069,6 +1314,13 @@ waitForL(() => {
               <span>${t("includeAllStations")}</span>
             </label>
             <button type="button" class="korail-nearest-location-button" data-nearest-current-location><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg><span data-nearest-location-label>${t("useCurrentLocation")}</span></button>
+            <label class="korail-nearest-sort">
+              <span>${t("sortCriterion")}</span>
+              <select data-nearest-sort-mode aria-label="${t("sortCriterion")}">
+                <option value="driving">🚗 ${t("sortDriving")}</option>
+                <option value="transit">🚌 ${t("sortTransit")}</option>
+              </select>
+            </label>
           </div>
         </form>
         <div class="korail-nearest-card__result" data-nearest-result aria-live="polite">
@@ -1117,9 +1369,10 @@ waitForL(() => {
     }
   }
 
-  async function findNearestStationMatch(address, includeAllStations = false) {
+  async function findNearestStationMatch(address, includeAllStations = false, sortMode = "driving") {
     const normalizedAddress = String(address || "").trim().replace(/([가-힣])\s+(\d+(길|로|가))/g, "$1$2");
-    const stations = await findNearestStationResults(normalizedAddress, includeAllStations);
+    const normalizedSortMode = normalizeNearestSortMode(sortMode);
+    const stations = await findNearestStationResults(normalizedAddress, includeAllStations, normalizedSortMode);
     const cacheKey = getNearestSearchCacheKey(normalizedAddress, includeAllStations);
     let origin = nearestSearchOrigins.get(cacheKey);
 
@@ -1128,8 +1381,10 @@ waitForL(() => {
       nearestSearchOrigins.set(cacheKey, origin);
       await requestNearestCache("set", cacheKey, {
         savedAt: Date.now(),
+        calculatedAt: nearestSearchCacheCalculatedAt.get(cacheKey) || Date.now(),
         address: normalizedAddress,
         includeAllStations,
+        sortMode: normalizedSortMode,
         origin,
         results: nearestSearchCache.get(cacheKey) || stations,
       }).catch(() => null);

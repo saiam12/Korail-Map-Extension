@@ -85,7 +85,7 @@ function isValidPageRequest(request) {
   if (request.kind === "geocode" || request.kind === "locationGeocode") {
     return typeof request.address === "string" && request.address.length <= 200;
   }
-  if (request.kind === "driving") {
+  if (request.kind === "driving" || request.kind === "transit") {
     return [request.startLat, request.startLng, request.goalLat, request.goalLng].every(Number.isFinite);
   }
   if (request.kind === "trainSchedule") {
@@ -100,8 +100,9 @@ function isValidPageRequest(request) {
 }
 
 const nearestCacheStorageKey = "korail-nearest-search-cache-v1";
+const nearestCacheSchemaVersion = 3;
 const nearestCacheMaxEntries = 300;
-const nearestCacheTtlMs = 7 * 24 * 60 * 60 * 1000;
+const nearestCacheTtlMs = 24 * 60 * 60 * 1000;
 let nearestCacheWriteQueue = Promise.resolve();
 
 function handleNearestCache(request) {
@@ -119,7 +120,8 @@ function handleNearestCache(request) {
 }
 
 function isFreshNearestCacheEntry(entry, now = Date.now()) {
-  return Number.isFinite(entry?.savedAt)
+  return entry?.schemaVersion === nearestCacheSchemaVersion
+    && Number.isFinite(entry.savedAt)
     && entry.savedAt <= now
     && now - entry.savedAt <= nearestCacheTtlMs
     && Array.isArray(entry.results);
@@ -166,6 +168,7 @@ async function processNearestCache(request) {
         includeAllStations: typeof entry.includeAllStations === "boolean"
           ? entry.includeAllStations
           : key.startsWith("all:"),
+        sortMode: entry.sortMode === "transit" ? "transit" : "driving",
       }));
     respondNearestCache(request, entries);
     return;
@@ -200,7 +203,15 @@ async function processNearestCache(request) {
       .sort(([, a], [, b]) => b.savedAt - a.savedAt)
       .slice(0, nearestCacheMaxEntries - 1);
     const nextCache = Object.fromEntries(nextEntries);
-    const nextEntry = { ...request.entry, savedAt: now };
+    const calculatedAt = Number.isFinite(request.entry.calculatedAt) && request.entry.calculatedAt <= now
+      ? request.entry.calculatedAt
+      : now;
+    const nextEntry = {
+      ...request.entry,
+      schemaVersion: nearestCacheSchemaVersion,
+      savedAt: now,
+      calculatedAt,
+    };
     nextCache[request.key] = nextEntry;
     await chrome.storage.local.set({ [nearestCacheStorageKey]: nextCache });
     respondNearestCache(request, nextEntry);

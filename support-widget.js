@@ -69,6 +69,7 @@
           <div class="korail-nearest-search__options">
             <label class="korail-nearest-search__toggle"><input data-nearest-include-all name="includeAll" type="checkbox"><span class="korail-nearest-search__switch" aria-hidden="true"></span><span data-nearest-field="includeAll"></span></label>
             <button type="button" class="korail-nearest-location-button korail-support-nearest__location" data-nearest-current-location><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg><span data-nearest-location-label></span></button>
+            <label class="korail-nearest-sort"><span data-nearest-field="sortCriterion"></span><select data-nearest-sort-mode name="sortMode"><option value="driving" data-nearest-sort-option="driving"></option><option value="transit" data-nearest-sort-option="transit"></option></select></label>
           </div>
         </form>
          <div class="korail-nearest-card__result" data-nearest-result aria-live="polite"></div>
@@ -104,6 +105,9 @@
     by(".korail-support-nearest__back").textContent = text("← 처음으로", "← Back");
     by("[data-nearest-field='address']").textContent = text("출발 위치", "Starting location");
     by("[data-nearest-field='includeAll']").textContent = text("일반역 포함", "Include all stations");
+    by("[data-nearest-field='sortCriterion']").textContent = text("정렬 기준", "Sort by");
+    by("[data-nearest-sort-option='driving']").textContent = text("🚗 자동차 시간순", "🚗 Driving time");
+    by("[data-nearest-sort-option='transit']").textContent = text("🚌 대중교통 시간순", "🚌 Public transit time");
     by(".korail-support-nearest__form input[name='address']").placeholder = text("예: 서울시청, 대구 수성구", "e.g. Seoul City Hall");
     by("[data-nearest-location-label]").textContent = text("내 위치", "My location");
     by("[data-nearest-history-label]").textContent = text("최근 기록", "History");
@@ -153,34 +157,83 @@
     const button = by("[data-nearest-current-location]");
     const input = by(".korail-support-nearest__form input[name='address']");
     const label = by("[data-nearest-location-label]");
-    button.disabled = true;
+    if (nearest.dataset.nearestSearchBusy === "true" || nearest.dataset.nearestLocationBusy === "true") return;
+    nearest.dataset.nearestLocationBusy = "true";
+    const lockedControls = Array.from(nearest.querySelectorAll([
+      "[data-nearest-address]",
+      "[data-nearest-submit]",
+      "[data-nearest-include-all]",
+      "[data-nearest-sort-mode]",
+      "[data-nearest-current-location]",
+      "[data-nearest-history-toggle]",
+    ].join(",")));
+    const previousDisabledStates = lockedControls.map((control) => control.disabled);
+    lockedControls.forEach((control) => { control.disabled = true; });
     label.textContent = text("위치 확인 중…", "Locating…");
+    let shouldFocusInput = false;
     try {
       const address = await window.KORAIL_HOME?.getCurrentLocationAddress?.();
       if (!address) throw new Error("location service unavailable");
       input.value = address;
-      input.focus();
+      shouldFocusInput = true;
     } catch {
       window.KORAIL_HOME?.renderNearestResults?.(nearest, "error", text("현재 위치를 가져올 수 없습니다. 위치 권한을 확인해주세요.", "Unable to get your current location. Check location permission."));
     } finally {
-      button.disabled = false;
+      delete nearest.dataset.nearestLocationBusy;
+      lockedControls.forEach((control, index) => {
+        control.disabled = previousDisabledStates[index];
+      });
       label.textContent = text("내 위치", "My location");
+      (shouldFocusInput ? input : button).focus();
     }
   });
   by(".korail-support-nearest__form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const submit = by("[data-nearest-submit]");
+    if (nearest.dataset.nearestSearchBusy === "true" || nearest.dataset.nearestLocationBusy === "true") return;
+    nearest.dataset.nearestSearchBusy = "true";
+    const requestedSortMode = form.elements.sortMode.value === "transit" ? "transit" : "driving";
+    const requestedAddress = form.elements.address.value;
+    const requestedIncludeAll = form.elements.includeAll.checked;
+    const lockedControls = Array.from(nearest.querySelectorAll([
+      "[data-nearest-address]",
+      "[data-nearest-include-all]",
+      "[data-nearest-sort-mode]",
+      "[data-nearest-current-location]",
+      "[data-nearest-history-toggle]",
+    ].join(",")));
+    const previousDisabledStates = lockedControls.map((control) => control.disabled);
+    lockedControls.forEach((control) => { control.disabled = true; });
     window.KORAIL_HOME?.renderNearestResults?.(nearest, "loading", text("계산 중입니다.", "Calculating."));
     submit.disabled = true;
     try {
-      const stations = await window.KORAIL_HOME?.findNearestStationResults?.(form.elements.address.value, form.elements.includeAll.checked);
+      const stations = await window.KORAIL_HOME?.findNearestStationResults?.(requestedAddress, requestedIncludeAll, requestedSortMode);
       if (!stations) throw new Error(text("서비스를 준비하는 중입니다. 잠시 후 다시 시도해주세요.", "The service is still loading. Please try again shortly."));
       window.KORAIL_HOME.renderNearestResults(nearest, "done", text("가까운 주요역", "Nearby major stations"), stations);
     } catch (error) {
       window.KORAIL_HOME?.renderNearestResults?.(nearest, "error", error.message || text("조회 중 오류가 발생했습니다.", "An error occurred while searching."));
     } finally {
+      delete nearest.dataset.nearestSearchBusy;
       submit.disabled = false;
+      lockedControls.forEach((control, index) => {
+        control.disabled = previousDisabledStates[index];
+      });
+      if (nearest.dataset.nearestFocusSortAfterSearch === "true") {
+        delete nearest.dataset.nearestFocusSortAfterSearch;
+        form.elements.sortMode.focus();
+      } else if (nearest.dataset.nearestFocusAddressAfterSearch === "true") {
+        delete nearest.dataset.nearestFocusAddressAfterSearch;
+        form.elements.address.focus();
+      }
+    }
+  });
+  by("[data-nearest-sort-mode]").addEventListener("change", () => {
+    const form = by(".korail-support-nearest__form");
+    const result = nearest.querySelector("[data-nearest-result]");
+    if (["done", "error"].includes(result?.dataset.state) && form.elements.address.value.trim()) {
+      nearest.dataset.nearestFocusSortAfterSearch = "true";
+      form.requestSubmit();
     }
   });
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !modal.hidden) close(); });

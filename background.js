@@ -24,7 +24,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 function handleApiRequest(request) {
   if (request.kind === "trainSchedule") return requestKorailTrainSchedule(request);
-  return handleNaverApiRequest(request);
+  return handleMapsApiRequest(request);
 }
 
 function isKorailSender(sender) {
@@ -63,13 +63,13 @@ async function handleSupportSubmit(request, sender) {
   };
 }
 
-async function handleNaverApiRequest(request) {
+async function handleMapsApiRequest(request) {
   const configuredUrl = self.KORAIL_BACKGROUND_CONFIG?.naverProxyUrl?.trim() || "";
-  if (!configuredUrl) throw new Error("Naver Maps proxy URL is not configured.");
+  if (!configuredUrl) throw new Error("Maps proxy URL is not configured.");
 
   const proxyUrl = new URL(configuredUrl);
-  if (proxyUrl.protocol !== "https:") throw new Error("Naver Maps proxy must use HTTPS.");
-  if (!["geocode", "driving", "locationGeocode", "locationReverse"].includes(request.kind)) throw new Error("Unknown API request.");
+  if (proxyUrl.protocol !== "https:") throw new Error("Maps proxy must use HTTPS.");
+  if (!["geocode", "driving", "transit", "locationGeocode", "locationReverse"].includes(request.kind)) throw new Error("Unknown API request.");
 
   if (request.kind === "locationGeocode" || request.kind === "locationReverse") {
     const path = request.kind === "locationGeocode" ? "/v1/geocode" : "/v1/reverse-geocode";
@@ -82,6 +82,16 @@ async function handleNaverApiRequest(request) {
         language: request.language,
       };
     return requestProxy(new URL(path, proxyUrl.origin).href, payload);
+  }
+
+  if (request.kind === "transit") {
+    return requestProxy(new URL("/v1/transit", proxyUrl.origin).href, {
+      kind: request.kind,
+      startLat: request.startLat,
+      startLng: request.startLng,
+      goalLat: request.goalLat,
+      goalLng: request.goalLng,
+    });
   }
 
   const payload = request.kind === "geocode"

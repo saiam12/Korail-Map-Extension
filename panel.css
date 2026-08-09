@@ -184,6 +184,99 @@
   justify-self: center;
 }
 
+.korail-nearest-search__options > .korail-nearest-sort {
+  grid-column: 1 / -1;
+}
+
+#korail-nearest-station-panel .korail-nearest-search__options {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  border: 1px solid #dbe5ef;
+  border-radius: 8px;
+  padding: 5px 6px;
+  background: #f8fafc;
+}
+
+#korail-nearest-station-panel .korail-nearest-search__options .korail-nearest-search__toggle {
+  align-self: center;
+  height: 28px;
+  padding: 0 4px;
+  border-radius: 6px;
+}
+
+#korail-nearest-station-panel .korail-nearest-search__options .korail-nearest-search__toggle:hover {
+  background: #eef3f8;
+}
+
+#korail-nearest-station-panel .korail-nearest-search__options .korail-nearest-location-button,
+#korail-nearest-station-panel .korail-nearest-search__label-row .korail-nearest-history-button {
+  height: 28px;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 7px;
+  font-weight: 700;
+}
+
+#korail-nearest-station-panel .korail-nearest-search__options .korail-nearest-location-button:hover,
+#korail-nearest-station-panel .korail-nearest-search__label-row .korail-nearest-history-button:hover {
+  border-color: #cfe0f2;
+  background: #eaf3fc;
+  text-decoration: none;
+}
+
+#korail-nearest-station-panel .korail-nearest-search__options > .korail-nearest-sort {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+#korail-nearest-station-panel .korail-nearest-search__options > .korail-nearest-sort select {
+  flex: 1 1 auto;
+  width: 0;
+  box-sizing: border-box;
+  padding-right: 28px;
+  border-color: #c5d2df;
+}
+
+.korail-nearest-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.korail-nearest-sort select {
+  min-width: 0;
+  max-width: 100%;
+  height: 30px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 0 26px 0 8px;
+  background: #fff;
+  color: #1e293b;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.korail-nearest-sort select:focus-visible {
+  border-color: #0052a4;
+  outline: 2px solid rgba(0, 82, 164, 0.2);
+  outline-offset: 1px;
+}
+
+.korail-nearest-sort select:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .korail-nearest-search__toggle {
   display: inline-flex;
   align-items: center;
@@ -306,10 +399,18 @@
 .korail-nearest-list__name {
   grid-column: 2;
   grid-row: 1;
+  display: flex;
+  align-items: center;
   min-width: 0;
   color: #111827;
   font-size: 14px;
   font-weight: 800;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.korail-nearest-list__name-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -317,6 +418,7 @@
 
 .korail-nearest-list__major {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   margin-left: 5px;
   border-radius: 999px;
@@ -330,16 +432,36 @@
 }
 
 .korail-nearest-list__meta {
-  grid-column: 2;
+  grid-column: 2 / 4;
   grid-row: 2;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
   color: #64748b;
   font-size: 12px;
   font-weight: 700;
+  line-height: 1.25;
+}
+
+.korail-nearest-list__times {
+  white-space: nowrap;
+}
+
+.korail-nearest-list__distance {
+  flex: 0 0 auto;
+  margin-left: 5px;
+  color: #7c8798;
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: 1px;
+  white-space: nowrap;
 }
 
 .korail-nearest-list__actions {
   grid-column: 3;
-  grid-row: 1 / span 2;
+  grid-row: 1;
   align-self: center;
   display: flex;
   gap: 4px;
@@ -701,15 +823,64 @@
 
 .korail-station-address-search__actions {
   display: flex;
-  align-items: flex-start;
-  gap: 14px;
+  flex-wrap: nowrap;
+  align-items: center;
+  min-height: 40px;
+  box-sizing: border-box;
+  gap: 8px;
+  border: 1px solid #dbe5ef;
+  border-radius: 8px;
+  padding: 4px 6px;
+  background: #f8fafc;
 }
 
 .korail-station-address-search__toggles {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
+  flex: 1 1 auto;
+  flex-direction: row;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+}
+
+.korail-station-address-search__toggles .korail-nearest-search__toggle {
+  align-self: center;
+  height: 30px;
+  padding: 0 6px;
+  border-radius: 6px;
+}
+
+.korail-station-address-search__toggles .korail-nearest-sort {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.korail-station-address-search__toggles .korail-nearest-sort select {
+  flex: 0 0 auto;
+  width: 168px;
+  box-sizing: border-box;
+  padding-right: 28px;
+  border-color: #c5d2df;
+  background-color: #fff;
+}
+
+.korail-station-address-search__actions .korail-nearest-location-button,
+.korail-station-address-search__actions .korail-nearest-history-button {
+  height: 30px;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 8px;
+  font-weight: 700;
+}
+
+.korail-station-address-search__actions .korail-nearest-location-button:hover,
+.korail-station-address-search__actions .korail-nearest-history-button:hover {
+  border-color: #cfe0f2;
+  background: #eaf3fc;
+  text-decoration: none;
 }
 
 .type_station_lookup-pop .station_wrap.korail-station-heading-row {
@@ -729,7 +900,7 @@
 }
 
 .korail-station-address-search__actions .korail-nearest-history-button {
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .korail-station-address-history {
@@ -758,6 +929,7 @@
 
 .korail-station-address-results--five {
   grid-template-columns: repeat(5, minmax(0, 1fr));
+  column-gap: 4px;
 }
 
 .korail-station-address-results[hidden] {
@@ -823,6 +995,21 @@
   color: #64748b;
   font-size: 10px;
   font-weight: 700;
+}
+
+.korail-station-address-results__item .korail-station-address-results__meta {
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.korail-station-address-results--five .korail-station-address-results__item {
+  padding-inline: 5px;
+}
+
+.korail-station-address-results--five .korail-station-address-results__item .korail-station-address-results__meta {
+  font-size: 9px;
+  letter-spacing: -0.2px;
+  white-space: nowrap;
 }
 
 .korail-map-label-control {
@@ -1145,7 +1332,7 @@
 #korail-support-modal[hidden] { display: none; }
 #korail-support-modal { position: fixed; inset: 0; z-index: 10001; pointer-events: none; font-family: inherit; }
 .korail-support-modal__backdrop { display: none; }
-.korail-support-modal__dialog { position: absolute; right: 4.575vw; bottom: 1.25vw; width: min(calc(100vw - 32px), 340px); padding: 20px 22px 16px; box-sizing: border-box; border-radius: 18px; background: #fff; color: #171717; pointer-events: auto; box-shadow: 0 18px 46px rgba(0, 0, 0, 0.28); }
+.korail-support-modal__dialog { position: absolute; right: 4.575vw; bottom: 1.25vw; width: min(calc(100vw - 32px), 340px); max-height: calc(100vh - 32px); overflow-y: auto; padding: 20px 22px 16px; box-sizing: border-box; border-radius: 18px; background: #fff; color: #171717; pointer-events: auto; box-shadow: 0 18px 46px rgba(0, 0, 0, 0.28); }
 .korail-support-modal__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .korail-support-modal__head h2 { margin: 0; font-size: 21px; }
 .korail-support-modal__close { width: 34px; height: 34px; border: 0; background: transparent; color: #444; font-size: 30px; line-height: 1; cursor: pointer; }
@@ -1176,5 +1363,5 @@
 
 @media (max-width: 600px) {
   #korail-support-launcher { right: 16px; bottom: 16px; width: 48px; height: 48px; }
-  .korail-support-modal__dialog { right: 16px; bottom: 76px; padding: 18px 20px 14px; }
+  .korail-support-modal__dialog { right: 16px; bottom: 76px; max-height: calc(100vh - 92px); padding: 18px 20px 14px; }
 }

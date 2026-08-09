@@ -1,5 +1,5 @@
 const NAVER_MAPS_BASE_URL = "https://maps.apigw.ntruss.com";
-const NAVER_DIRECTIONS_BASE_URL = "https://naveropenapi.apigw.ntruss.com";
+const KAKAO_TRANSIT_URL = "https://dapi.kakao.com/v2/routing/publictraffic";
 
 function json(data, status = 200, origin = "", extraHeaders = {}) {
   const headers = {
@@ -32,7 +32,7 @@ function isCoordinate(value, min, max) {
   return Number.isFinite(number) && number >= min && number <= max;
 }
 
-function validateDrivingPayload(body) {
+function validateRoutePayload(body) {
   const coordinates = [
     [body.startLat, 32, 39],
     [body.startLng, 124, 132],
@@ -54,6 +54,58 @@ async function requestNaver(url, env) {
     return { ok: false, status: response.status, data: data || { error: "Invalid Naver Maps response." } };
   }
   return { ok: true, status: response.status, data };
+}
+
+async function requestKakaoTransit(body, env) {
+  const query = new URLSearchParams({
+    start_x: String(Number(body.startLng)),
+    start_y: String(Number(body.startLat)),
+    end_x: String(Number(body.goalLng)),
+    end_y: String(Number(body.goalLat)),
+    input_coord: "WGS84",
+    output_coord: "WGS84",
+  });
+  const response = await fetch(`${KAKAO_TRANSIT_URL}?${query}`, {
+    headers: {
+      "Accept": "application/json",
+      "Authorization": `KakaoAK ${env.KAKAO_REST_API_KEY}`,
+    },
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data) {
+    return {
+      ok: false,
+      status: response.ok ? 502 : response.status,
+      data: data || { error: "Invalid Kakao Maps response." },
+    };
+  }
+
+  const durationSeconds = Math.min(...(Array.isArray(data.routes) ? data.routes : [])
+    .map((route) => Number(route?.properties?.totalTime))
+    .filter((duration) => Number.isFinite(duration) && duration > 0));
+  const unavailableStatuses = new Set(["NO_RESULTS", "STARTNODES_NULL", "ENDNODES_NULL", "EQUAL_POINTS"]);
+  if (unavailableStatuses.has(data.status)) {
+    return {
+      ok: true,
+      status: response.status,
+      data: { available: false, status: data.status },
+    };
+  }
+  if (data.status !== "OK" || !Number.isFinite(durationSeconds)) {
+    return {
+      ok: false,
+      status: data.status === "INVALID_REQUEST" ? 400 : 502,
+      data: {
+        error: "Invalid Kakao Maps transit response.",
+        providerStatus: data.status || "UNKNOWN",
+      },
+    };
+  }
+  return {
+    ok: true,
+    status: response.status,
+    data: { available: true, durationSeconds },
+  };
 }
 
 async function requestNaverLocalSearch(query, env) {
@@ -116,7 +168,7 @@ export default {
     }
 
     const pathname = new URL(request.url).pathname;
-    if (request.method !== "POST" || !["/v1/maps", "/v1/geocode", "/v1/reverse-geocode"].includes(pathname)) {
+    if (request.method !== "POST" || !["/v1/maps", "/v1/geocode", "/v1/reverse-geocode", "/v1/transit"].includes(pathname)) {
       return json({ error: "Not found." }, 404, origin);
     }
     const extensionId = request.headers.get("X-Korail-Extension-Id") || "";
@@ -134,26 +186,38 @@ export default {
 
     if (pathname === "/v1/geocode" && body.kind !== "locationGeocode") return json({ error: "Invalid request." }, 400, origin);
     if (pathname === "/v1/reverse-geocode" && body.kind !== "locationReverse") return json({ error: "Invalid request." }, 400, origin);
+    if (pathname === "/v1/transit" && body.kind !== "transit") return json({ error: "Invalid request." }, 400, origin);
     if (pathname === "/v1/maps" && !["geocode", "driving"].includes(body.kind)) return json({ error: "Invalid request." }, 400, origin);
 
-    if (!env.NAVER_CLIENT_ID || !env.NAVER_CLIENT_SECRET) {
+    if (pathname === "/v1/transit" && !env.KAKAO_REST_API_KEY) {
+      return json({ error: "Transit proxy is not configured." }, 503, origin);
+    }
+    if (pathname !== "/v1/transit" && (!env.NAVER_CLIENT_ID || !env.NAVER_CLIENT_SECRET)) {
       return json({ error: "Proxy is not configured." }, 503, origin);
     }
 
     if (env.MAPS_RATE_LIMITER) {
       const installationId = String(body.installationId || request.headers.get("X-Korail-Installation-Id") || "");
-      const clientKey = /^[0-9a-f-]{36}$/i.test(installationId)
-        ? installationId
-        : request.headers.get("CF-Connecting-IP") || "unknown";
-      const { success } = await env.MAPS_RATE_LIMITER.limit({ key: clientKey });
-      if (!success) {
-        return json(
-          { error: "Too many API requests. Please try again in one minute." },
-          429,
-          origin,
-          { "Retry-After": "60" },
-        );
+      const clientIp = request.headers.get("CF-Connecting-IP") || "unknown";
+      const rateLimitKeys = [`ip:${clientIp}`];
+      if (/^[0-9a-f-]{36}$/i.test(installationId)) rateLimitKeys.push(`installation:${installationId}`);
+      for (const key of rateLimitKeys) {
+        const { success } = await env.MAPS_RATE_LIMITER.limit({ key });
+        if (!success) {
+          return json(
+            { error: "Too many API requests. Please try again in one minute." },
+            429,
+            origin,
+            { "Retry-After": "60" },
+          );
+        }
       }
+    }
+
+    if (pathname === "/v1/transit") {
+      if (!validateRoutePayload(body)) return json({ error: "Invalid coordinates." }, 400, origin);
+      const result = await requestKakaoTransit(body, env);
+      return json(result.data, result.ok ? 200 : result.status, origin);
     }
 
     let naverUrl;
@@ -170,13 +234,13 @@ export default {
       });
       naverUrl = `${NAVER_MAPS_BASE_URL}/map-reversegeocode/v2/gc?${query}`;
     } else {
-      if (!validateDrivingPayload(body)) return json({ error: "Invalid coordinates." }, 400, origin);
+      if (!validateRoutePayload(body)) return json({ error: "Invalid coordinates." }, 400, origin);
       const query = new URLSearchParams({
         start: `${Number(body.startLng)},${Number(body.startLat)}`,
         goal: `${Number(body.goalLng)},${Number(body.goalLat)}`,
         option: "trafast",
       });
-      naverUrl = `${NAVER_DIRECTIONS_BASE_URL}/map-direction/v1/driving?${query}`;
+      naverUrl = `${NAVER_MAPS_BASE_URL}/map-direction/v1/driving?${query}`;
     }
 
     const result = await requestNaver(naverUrl, env);
@@ -196,6 +260,9 @@ export default {
     }
     if (result.ok && body.kind === "geocode" && result.data.status !== "OK") {
       return json({ error: result.data.errorMessage || "Geocoding failed." }, 502, origin);
+    }
+    if (body.kind === "driving" && Number(result.data?.code) >= 1 && Number(result.data?.code) <= 5) {
+      return json({ available: false, code: Number(result.data.code) }, 200, origin);
     }
     if (result.ok && body.kind === "driving" && result.data.code !== 0) {
       return json({ error: result.data.message || `Directions failed: code ${result.data.code}` }, 502, origin);
