@@ -891,6 +891,62 @@ waitForL(() => {
     return results;
   }
 
+  async function findRouteSummary(departure, arrival) {
+    const [origin, destination] = await Promise.all([
+      geocodeAddress(departure),
+      geocodeAddress(arrival),
+    ]);
+    const payload = {
+      startLat: origin.lat,
+      startLng: origin.lng,
+      goalLat: destination.lat,
+      goalLng: destination.lng,
+    };
+    const [drivingResult, transitResult] = await Promise.allSettled([
+      requestMapsApi("driving", payload),
+      requestMapsApi("transit", payload),
+    ]);
+    const drivingSummary = drivingResult.status === "fulfilled"
+      ? drivingResult.value?.route?.trafast?.[0]?.summary
+      : null;
+    const drivingDurationSeconds = Number(drivingSummary?.duration) / 1000;
+    const distanceMeters = Number(drivingSummary?.distance);
+    const transitDurationSeconds = transitResult.status === "fulfilled" && transitResult.value?.available !== false
+      ? Number(transitResult.value?.durationSeconds)
+      : NaN;
+    const transitSteps = transitResult.status === "fulfilled" && Array.isArray(transitResult.value?.steps)
+      ? transitResult.value.steps
+        .map((step) => ({
+          type: step?.type,
+          durationSeconds: Number(step?.time),
+          vehicleNames: Array.isArray(step?.vehicleNames) ? step.vehicleNames.filter((name) => typeof name === "string") : [],
+        }))
+        .filter((step) => ["WALKING", "BUS", "SUBWAY"].includes(step.type)
+          && Number.isFinite(step.durationSeconds) && step.durationSeconds > 0)
+        .map((step) => ({ ...step, durationText: formatDuration(step.durationSeconds) }))
+      : [];
+
+    if (drivingResult.status === "rejected") {
+      console.warn("[Korail] Route driving request failed:", drivingResult.reason);
+    }
+    if (transitResult.status === "rejected") {
+      console.warn("[Korail] Route transit request failed:", transitResult.reason);
+    }
+
+    return {
+      drivingDurationText: Number.isFinite(drivingDurationSeconds) && drivingDurationSeconds > 0
+        ? formatDuration(drivingDurationSeconds)
+        : "",
+      transitDurationText: Number.isFinite(transitDurationSeconds) && transitDurationSeconds > 0
+        ? formatDuration(transitDurationSeconds)
+        : "",
+      distanceText: Number.isFinite(distanceMeters) && distanceMeters >= 0
+        ? formatDistance(distanceMeters)
+        : "",
+      transitSteps,
+    };
+  }
+
   function normalizeNearestSortMode(sortMode) {
     return sortMode === "transit" ? "transit" : "driving";
   }
@@ -1536,6 +1592,7 @@ waitForL(() => {
     injectHomeNearestPanel,
     findNearestStationResults,
     findNearestStationMatch,
+    findRouteSummary,
     getNearestSearchHistory: () => requestNearestCache("list").catch(() => []),
     removeNearestSearchHistory: (key) => requestNearestCache("hide", key),
     getCurrentLocationAddress,

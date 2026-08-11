@@ -34,6 +34,7 @@
       <div class="korail-support-choice">
         <p class="korail-support-choice__notice"></p>
         <button type="button" class="korail-support-choice__item" data-support-choice="nearest"><strong></strong><span></span></button>
+        <button type="button" class="korail-support-choice__item" data-support-choice="route"><strong></strong><span></span></button>
         <button type="button" class="korail-support-choice__item" data-support-choice="inquiry"><strong></strong><span></span></button>
         <button type="button" class="korail-support-choice__item" data-support-choice="restaurant"><strong></strong><span></span></button>
       </div>
@@ -73,7 +74,26 @@
           </div>
         </form>
          <div class="korail-nearest-card__result" data-nearest-result aria-live="polite"></div>
-       </div>
+      </div>
+      <div class="korail-support-choice korail-support-route" hidden>
+        <form class="korail-route-search">
+          <div class="korail-route-search__label-row">
+            <button type="button" class="korail-support-back korail-support-route__back"></button>
+            <button type="button" class="korail-nearest-history-button" data-route-history-toggle aria-expanded="false" aria-controls="korail-route-history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5M12 7v5l3 2"></path></svg><span data-route-history-label></span></button>
+          </div>
+          <div id="korail-route-history" class="korail-route-history" data-route-history hidden></div>
+          <div class="korail-route-search__field">
+            <div class="korail-route-search__field-head"><label for="korail-route-departure"><span data-route-field="departure"></span></label><button type="button" class="korail-nearest-location-button" data-route-current-location><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg><span data-route-current-location-label></span></button></div>
+            <input id="korail-route-departure" name="departure" type="text" required autocomplete="street-address">
+          </div>
+          <div class="korail-route-search__field">
+            <div class="korail-route-search__field-head"><label for="korail-route-arrival"><span data-route-field="arrival"></span></label></div>
+            <input id="korail-route-arrival" name="arrival" type="text" required autocomplete="street-address">
+          </div>
+          <button type="submit" class="korail-nearest-card__button" data-route-submit></button>
+        </form>
+        <div class="korail-route-result" data-route-result aria-live="polite"></div>
+      </div>
      </section>`;
   document.body.appendChild(modal);
 
@@ -82,6 +102,7 @@
   const inquiry = by(".korail-support-inquiry");
   const feedback = by(".korail-support-feedback");
   const nearest = by(".korail-support-nearest");
+  const route = by(".korail-support-route");
   const nearestChoice = by("[data-support-choice='nearest']");
   function isGlobalNearestPage(pathname = location.pathname) {
     return /\/global\/(eng|jpn|chn|tw|vi|th|id)\/(?:main|ticket(?:\/.*)?)\/?$/i.test(pathname);
@@ -92,6 +113,8 @@
     by("[data-support-choice='nearest'] strong").textContent = text("가까운 주요역 찾기", "Find nearby major stations");
     by("[data-support-choice='nearest'] span").textContent = text("주소를 기준으로 가까운 주요역을 찾습니다.", "Find nearby major stations by address.");
     nearestChoice.hidden = !isGlobalNearestPage();
+    by("[data-support-choice='route'] strong").textContent = text("이동시간 · 거리 조회", "Travel time & distance");
+    by("[data-support-choice='route'] span").textContent = text("출발지와 도착지 사이의 이동 정보를 확인합니다.", "Check travel information between two locations.");
     by("[data-support-choice='inquiry'] strong").textContent = text("문의", "Contact");
     by("[data-support-choice='inquiry'] span").textContent = text("확장 프로그램과 코레일 관련 문의", "Extension and KORAIL inquiries");
     by("[data-support-choice='extension'] strong").textContent = text("확장 프로그램 문의", "Extension feedback");
@@ -113,6 +136,15 @@
     by("[data-nearest-history-label]").textContent = text("최근 기록", "History");
     by("[data-nearest-submit]").textContent = text("검색", "Search");
     window.KORAIL_HOME?.renderNearestResults?.(nearest, "idle", text("주소를 입력한 후 검색하세요.", "Enter an address and search."));
+    by(".korail-support-route__back").textContent = text("← 처음으로", "← Back");
+    by("[data-route-field='departure']").textContent = text("출발지", "Departure");
+    by("[data-route-field='arrival']").textContent = text("도착지", "Arrival");
+    by(".korail-route-search input[name='departure']").placeholder = text("예: 서울시청", "e.g. Seoul City Hall");
+    by(".korail-route-search input[name='arrival']").placeholder = text("예: 부산역", "e.g. Busan Station");
+    by("[data-route-submit]").textContent = text("조회", "Search");
+    by("[data-route-history-label]").textContent = text("최근 기록", "History");
+    by("[data-route-current-location-label]").textContent = text("현위치", "My location");
+    renderRouteResult("idle");
     by("[data-support-field='category']").textContent = text("문의 유형", "Category");
     by("[data-support-field='message']").textContent = text("문의 내용 *", "Message *");
     by("[data-support-field='contact']").textContent = text("회신 연락처 (선택)", "Reply contact (optional)");
@@ -125,8 +157,211 @@
     by(".korail-support-form__submit").textContent = text("문의 제출", "Send feedback");
   };
 
-  const showChoices = () => { choice.hidden = false; inquiry.hidden = true; feedback.hidden = true; nearest.hidden = true; };
-  const showInquiry = () => { choice.hidden = true; inquiry.hidden = false; feedback.hidden = true; nearest.hidden = true; };
+  function renderRouteResult(state, summary = null, message = "") {
+    const result = by("[data-route-result]");
+    result.dataset.state = state;
+    result.replaceChildren();
+    const label = document.createElement("span");
+    label.className = "korail-nearest-card__result-label";
+    label.textContent = text("조회 결과", "Search results");
+    result.appendChild(label);
+
+    if (state !== "done") {
+      const title = document.createElement("strong");
+      title.textContent = state === "loading"
+        ? text("경로를 계산하고 있습니다.", "Calculating route.")
+        : state === "error"
+          ? text("조회할 수 없습니다", "Unable to search")
+          : text("출발지와 도착지를 입력하세요.", "Enter a departure and arrival.");
+      const detail = document.createElement("small");
+      detail.textContent = message || (state === "loading"
+        ? text("자동차와 대중교통 경로를 함께 확인합니다.", "Checking driving and public-transit routes.")
+        : text("주소 또는 장소명을 입력할 수 있습니다.", "You can enter an address or place name."));
+      result.append(title, detail);
+      return;
+    }
+
+    const transitCard = renderTransitRoute(summary.transitSteps, summary.transitDurationText);
+    const metrics = document.createElement("div");
+    metrics.className = "korail-route-result__metrics";
+    [
+      [text("자동차", "Driving"), summary.drivingDurationText],
+      [text("대중교통", "Public transit"), summary.transitDurationText, "transit"],
+      [text("거리", "Distance"), summary.distanceText],
+    ].forEach(([name, value, type]) => {
+      const isTransitToggle = type === "transit" && transitCard;
+      const metric = document.createElement(isTransitToggle ? "button" : "div");
+      metric.className = `korail-route-result__metric${isTransitToggle ? " is-transit-toggle" : ""}`;
+      if (isTransitToggle) metric.type = "button";
+      const metricName = document.createElement("span");
+      metricName.textContent = name;
+      const metricValue = document.createElement("strong");
+      metricValue.textContent = value || text("조회할 수 없음", "Unavailable");
+      metric.append(metricName, metricValue);
+      if (isTransitToggle) {
+        const setExpanded = (expanded) => {
+          transitCard.hidden = !expanded;
+          metric.setAttribute("aria-expanded", String(expanded));
+          metric.setAttribute("aria-label", expanded
+            ? text("대중교통 상세 닫기", "Hide public-transit details")
+            : text("대중교통 상세 보기", "View public-transit details"));
+        };
+        metric.setAttribute("aria-controls", transitCard.id);
+        metric.addEventListener("click", () => setExpanded(transitCard.hidden));
+        setExpanded(false);
+      }
+      metrics.appendChild(metric);
+    });
+    result.appendChild(metrics);
+    if (transitCard) result.appendChild(transitCard);
+  }
+
+  function renderTransitRoute(steps, totalDurationText) {
+    if (!Array.isArray(steps) || !steps.length) return null;
+    const labels = {
+      WALKING: ["🚶", text("도보", "Walk")],
+      BUS: ["🚌", text("버스", "Bus")],
+      SUBWAY: ["🚇", text("지하철", "Subway")],
+    };
+    const card = document.createElement("section");
+    card.className = "korail-route-transit";
+    card.id = "korail-route-transit-details";
+    card.hidden = true;
+    const heading = document.createElement("div");
+    heading.className = "korail-route-transit__heading";
+    const title = document.createElement("strong");
+    title.textContent = text("최적 대중교통 경로", "Best public-transit route");
+    const total = document.createElement("span");
+    total.textContent = totalDurationText || "";
+    heading.append(title, total);
+
+    const bar = document.createElement("div");
+    bar.className = "korail-route-transit__bar";
+    const list = document.createElement("div");
+    list.className = "korail-route-transit__steps";
+    steps.forEach((step) => {
+      const [icon, label] = labels[step.type] || [];
+      if (!label) return;
+      const segment = document.createElement("span");
+      segment.className = `korail-route-transit__segment is-${step.type.toLowerCase()}`;
+      segment.style.flexGrow = String(Math.max(1, Math.round(step.durationSeconds / 60)));
+      segment.textContent = step.durationText;
+      bar.appendChild(segment);
+
+      const item = document.createElement("div");
+      item.className = "korail-route-transit__step";
+      const iconElement = document.createElement("span");
+      iconElement.className = `korail-route-transit__icon is-${step.type.toLowerCase()}`;
+      iconElement.textContent = icon;
+      const details = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = `${label} · ${step.durationText}`;
+      const vehicleNames = Array.isArray(step.vehicleNames) ? step.vehicleNames.filter(Boolean) : [];
+      if (vehicleNames.length) {
+        const vehicle = document.createElement("span");
+        vehicle.textContent = vehicleNames.join(" · ");
+        details.append(name, vehicle);
+      } else {
+        details.append(name);
+      }
+      item.append(iconElement, details);
+      list.appendChild(item);
+    });
+    if (!bar.children.length) return null;
+    card.append(heading, bar, list);
+    return card;
+  }
+
+  function getRouteHistoryKey(departure, arrival) {
+    return JSON.stringify([departure, arrival]);
+  }
+
+  function requestRouteHistory(action, key = "", entry = null) {
+    const requestId = `route-history-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return new Promise((resolve, reject) => {
+      const finish = (callback) => {
+        clearTimeout(timer);
+        window.removeEventListener("message", handler);
+        callback();
+      };
+      const timer = setTimeout(() => finish(() => reject(new Error("Route history timed out."))), 3000);
+      const handler = (event) => {
+        if (event.source !== window
+          || event.data?.type !== "KORAIL_ROUTE_HISTORY_RESPONSE"
+          || event.data.requestId !== requestId) return;
+        if (event.data.ok) finish(() => resolve(event.data.entries || null));
+        else finish(() => reject(new Error(event.data.error || "Route history failed.")));
+      };
+      window.addEventListener("message", handler);
+      window.postMessage({ type: "KORAIL_ROUTE_HISTORY_REQUEST", requestId, action, key, entry }, "*");
+    });
+  }
+
+  function closeRouteHistory() {
+    const history = by("[data-route-history]");
+    if (history) history.hidden = true;
+    by("[data-route-history-toggle]")?.setAttribute("aria-expanded", "false");
+  }
+
+  function renderRouteHistory(entries) {
+    const history = by("[data-route-history]");
+    if (!history) return;
+    history.replaceChildren();
+    if (!entries.length) {
+      const empty = document.createElement("span");
+      empty.className = "korail-route-history__empty";
+      empty.textContent = text("최근 조회 기록이 없습니다.", "No recent searches.");
+      history.appendChild(empty);
+      return;
+    }
+    entries.forEach((entry) => {
+      const item = document.createElement("div");
+      item.className = "korail-route-history__item";
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "korail-route-history__remove";
+      remove.dataset.routeHistoryRemove = entry.key;
+      remove.setAttribute("aria-label", text(`${entry.departure}에서 ${entry.arrival} 기록 삭제`, `Remove ${entry.departure} to ${entry.arrival}`));
+      remove.textContent = "×";
+      const select = document.createElement("button");
+      select.type = "button";
+      select.className = "korail-route-history__select";
+      select.dataset.routeHistorySelect = "true";
+      select.dataset.departure = entry.departure;
+      select.dataset.arrival = entry.arrival;
+      const departure = document.createElement("span");
+      departure.textContent = entry.departure;
+      const arrow = document.createElement("span");
+      arrow.textContent = "→";
+      const arrival = document.createElement("span");
+      arrival.textContent = entry.arrival;
+      select.append(departure, arrow, arrival);
+      item.append(remove, select);
+      history.appendChild(item);
+    });
+  }
+
+  async function toggleRouteHistory() {
+    const history = by("[data-route-history]");
+    const toggle = by("[data-route-history-toggle]");
+    if (!history || !toggle) return;
+    if (!history.hidden) {
+      closeRouteHistory();
+      return;
+    }
+    toggle.setAttribute("aria-expanded", "true");
+    history.hidden = false;
+    history.replaceChildren();
+    const loading = document.createElement("span");
+    loading.className = "korail-route-history__empty";
+    loading.textContent = text("기록을 불러오는 중입니다.", "Loading history.");
+    history.appendChild(loading);
+    const entries = await requestRouteHistory("list").catch(() => []);
+    renderRouteHistory(Array.isArray(entries) ? entries : []);
+  }
+
+  const showChoices = () => { choice.hidden = false; inquiry.hidden = true; feedback.hidden = true; nearest.hidden = true; route.hidden = true; };
+  const showInquiry = () => { choice.hidden = true; inquiry.hidden = false; feedback.hidden = true; nearest.hidden = true; route.hidden = true; };
   const showNearest = () => {
     if (!isGlobalNearestPage()) return;
     window.KORAIL_HOME?.bindNearestHistory?.(nearest);
@@ -135,6 +370,16 @@
     inquiry.hidden = true;
     feedback.hidden = true;
     nearest.hidden = false;
+    route.hidden = true;
+  };
+  const showRoute = () => {
+    choice.hidden = true;
+    inquiry.hidden = true;
+    feedback.hidden = true;
+    nearest.hidden = true;
+    route.hidden = false;
+    closeRouteHistory();
+    route.querySelector("input[name='departure']")?.focus();
   };
   const close = () => { modal.hidden = true; showChoices(); };
   const open = () => { setLabels(); by(".korail-support-form__status").textContent = ""; by(".korail-support-form__status").dataset.state = ""; showChoices(); modal.hidden = false; };
@@ -147,9 +392,35 @@
   by(".korail-support-modal__backdrop").addEventListener("click", close);
   by(".korail-support-feedback__back").addEventListener("click", showInquiry);
   by(".korail-support-nearest__back").addEventListener("click", showChoices);
+  by(".korail-support-route__back").addEventListener("click", showChoices);
   by(".korail-support-inquiry__back").addEventListener("click", showChoices);
   by("[data-support-choice='inquiry']").addEventListener("click", showInquiry);
   by("[data-support-choice='nearest']").addEventListener("click", showNearest);
+  by("[data-support-choice='route']").addEventListener("click", showRoute);
+  by("[data-route-history-toggle]").addEventListener("click", toggleRouteHistory);
+  by("[data-route-history]").addEventListener("click", async (event) => {
+    if (route.dataset.routeSearchBusy === "true") return;
+    const remove = event.target.closest("[data-route-history-remove]");
+    if (remove) {
+      remove.disabled = true;
+      try {
+        await requestRouteHistory("remove", remove.dataset.routeHistoryRemove);
+        remove.closest(".korail-route-history__item")?.remove();
+        const history = by("[data-route-history]");
+        if (history && !history.children.length) renderRouteHistory([]);
+      } catch {
+        remove.disabled = false;
+      }
+      return;
+    }
+    const selected = event.target.closest("[data-route-history-select]");
+    if (!selected) return;
+    const form = by(".korail-route-search");
+    form.elements.departure.value = selected.dataset.departure || "";
+    form.elements.arrival.value = selected.dataset.arrival || "";
+    closeRouteHistory();
+    form.requestSubmit();
+  });
   by("[data-support-choice='extension']").addEventListener("click", () => { inquiry.hidden = true; feedback.hidden = false; by("textarea").focus(); });
   by("[data-support-choice='korail']").addEventListener("click", () => window.open(officialCenterUrl, "_blank", "noopener"));
   by("[data-support-choice='restaurant']").addEventListener("click", () => window.open(restaurantGuideUrl(), "_blank", "noopener"));
@@ -185,6 +456,31 @@
       });
       label.textContent = text("내 위치", "My location");
       (shouldFocusInput ? input : button).focus();
+    }
+  });
+  by("[data-route-current-location]").addEventListener("click", async () => {
+    const button = by("[data-route-current-location]");
+    const input = by(".korail-route-search input[name='departure']");
+    const label = by("[data-route-current-location-label]");
+    if (route.dataset.routeSearchBusy === "true" || route.dataset.routeLocationBusy === "true") return;
+    route.dataset.routeLocationBusy = "true";
+    const controls = Array.from(route.querySelectorAll("input, button"));
+    const disabledStates = controls.map((control) => control.disabled);
+    controls.forEach((control) => { control.disabled = true; });
+    label.textContent = text("위치 확인 중", "Locating");
+    let foundAddress = false;
+    try {
+      const address = await window.KORAIL_HOME?.getCurrentLocationAddress?.();
+      if (!address) throw new Error("location service unavailable");
+      input.value = address;
+      foundAddress = true;
+    } catch {
+      renderRouteResult("error", null, text("현재 위치를 가져올 수 없습니다. 위치 권한을 확인해 주세요.", "Unable to get your current location. Check location permission."));
+    } finally {
+      delete route.dataset.routeLocationBusy;
+      controls.forEach((control, index) => { control.disabled = disabledStates[index]; });
+      label.textContent = text("현위치", "My location");
+      (foundAddress ? input : button).focus();
     }
   });
   by(".korail-support-nearest__form").addEventListener("submit", async (event) => {
@@ -234,6 +530,41 @@
     if (["done", "error"].includes(result?.dataset.state) && form.elements.address.value.trim()) {
       nearest.dataset.nearestFocusSortAfterSearch = "true";
       form.requestSubmit();
+    }
+  });
+  by(".korail-route-search").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (route.dataset.routeSearchBusy === "true" || route.dataset.routeLocationBusy === "true") return;
+    const form = event.currentTarget;
+    const submit = by("[data-route-submit]");
+    const historyToggle = by("[data-route-history-toggle]");
+    const controls = Array.from(form.querySelectorAll("input, button[type='submit']"));
+    const disabledStates = controls.map((control) => control.disabled);
+    const wasHistoryToggleDisabled = historyToggle.disabled;
+    route.dataset.routeSearchBusy = "true";
+    controls.forEach((control) => { control.disabled = true; });
+    historyToggle.disabled = true;
+    closeRouteHistory();
+    renderRouteResult("loading");
+    try {
+      const departure = form.elements.departure.value.trim();
+      const arrival = form.elements.arrival.value.trim();
+      const summary = await window.KORAIL_HOME?.findRouteSummary?.(
+        departure,
+        arrival,
+      );
+      if (!summary) throw new Error(text("서비스를 준비 중입니다. 잠시 후 다시 시도해 주세요.", "The service is still loading. Please try again shortly."));
+      renderRouteResult("done", summary);
+      await requestRouteHistory("set", getRouteHistoryKey(departure, arrival), { departure, arrival }).catch(() => null);
+    } catch (error) {
+      renderRouteResult("error", null, error.message || text("조회 중 오류가 발생했습니다.", "An error occurred while searching."));
+    } finally {
+      delete route.dataset.routeSearchBusy;
+      controls.forEach((control, index) => { control.disabled = disabledStates[index]; });
+      historyToggle.disabled = wasHistoryToggleDisabled;
+      if (!form.elements.departure.value.trim()) form.elements.departure.focus();
+      else if (!form.elements.arrival.value.trim()) form.elements.arrival.focus();
+      else submit.focus();
     }
   });
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !modal.hidden) close(); });

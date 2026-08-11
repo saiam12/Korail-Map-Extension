@@ -27,6 +27,11 @@ window.addEventListener("message", async (event) => {
     return;
   }
 
+  if (request.type === "KORAIL_ROUTE_HISTORY_REQUEST") {
+    handleRouteHistory(request);
+    return;
+  }
+
   if (request.type === "KORAIL_SUPPORT_SUBMIT") {
     if (!isValidPageRequest(request)) return;
     try {
@@ -226,6 +231,97 @@ function respondNearestCache(request, entry) {
     requestId: request.requestId,
     ok: true,
     entry,
+  }, "*");
+}
+
+const routeHistoryStorageKey = "korail-route-history-v1";
+const routeHistorySchemaVersion = 1;
+const routeHistoryMaxEntries = 10;
+const routeHistoryTtlMs = 30 * 24 * 60 * 60 * 1000;
+let routeHistoryWriteQueue = Promise.resolve();
+
+function isFreshRouteHistoryEntry(entry, now = Date.now()) {
+  return entry?.schemaVersion === routeHistorySchemaVersion
+    && Number.isFinite(entry.savedAt)
+    && entry.savedAt <= now
+    && now - entry.savedAt <= routeHistoryTtlMs
+    && typeof entry.departure === "string"
+    && typeof entry.arrival === "string";
+}
+
+function handleRouteHistory(request) {
+  routeHistoryWriteQueue = routeHistoryWriteQueue
+    .catch(() => {})
+    .then(() => processRouteHistory(request))
+    .catch((error) => {
+      window.postMessage({
+        type: "KORAIL_ROUTE_HISTORY_RESPONSE",
+        requestId: request.requestId,
+        ok: false,
+        error: error.message || "Route history failed.",
+      }, "*");
+    });
+}
+
+async function processRouteHistory(request) {
+  const stored = await chrome.storage.local.get(routeHistoryStorageKey);
+  const rawHistory = stored[routeHistoryStorageKey];
+  const rawEntries = rawHistory && typeof rawHistory === "object" && !Array.isArray(rawHistory)
+    ? rawHistory
+    : {};
+  const now = Date.now();
+  const entries = Object.entries(rawEntries)
+    .filter(([, entry]) => isFreshRouteHistoryEntry(entry, now));
+  const history = Object.fromEntries(entries);
+  if (entries.length !== Object.keys(rawEntries).length) {
+    await chrome.storage.local.set({ [routeHistoryStorageKey]: history });
+  }
+
+  if (request.action === "list") {
+    respondRouteHistory(request, Object.entries(history)
+      .sort(([, left], [, right]) => right.savedAt - left.savedAt)
+      .slice(0, routeHistoryMaxEntries)
+      .map(([key, entry]) => ({ key, departure: entry.departure, arrival: entry.arrival })));
+    return;
+  }
+
+  if (request.action === "remove"
+    && typeof request.key === "string"
+    && request.key.length <= 450) {
+    delete history[request.key];
+    await chrome.storage.local.set({ [routeHistoryStorageKey]: history });
+    respondRouteHistory(request, null);
+    return;
+  }
+
+  const departure = typeof request.entry?.departure === "string" ? request.entry.departure.trim() : "";
+  const arrival = typeof request.entry?.arrival === "string" ? request.entry.arrival.trim() : "";
+  if (request.action === "set"
+    && typeof request.key === "string"
+    && request.key.length <= 450
+    && departure.length > 0 && departure.length <= 200
+    && arrival.length > 0 && arrival.length <= 200) {
+    const nextEntries = Object.entries(history)
+      .filter(([key]) => key !== request.key)
+      .sort(([, left], [, right]) => right.savedAt - left.savedAt)
+      .slice(0, routeHistoryMaxEntries - 1);
+    const nextHistory = Object.fromEntries(nextEntries);
+    const entry = { schemaVersion: routeHistorySchemaVersion, savedAt: now, departure, arrival };
+    nextHistory[request.key] = entry;
+    await chrome.storage.local.set({ [routeHistoryStorageKey]: nextHistory });
+    respondRouteHistory(request, entry);
+    return;
+  }
+
+  throw new Error("Invalid route history request.");
+}
+
+function respondRouteHistory(request, entries) {
+  window.postMessage({
+    type: "KORAIL_ROUTE_HISTORY_RESPONSE",
+    requestId: request.requestId,
+    ok: true,
+    entries,
   }, "*");
 }
 

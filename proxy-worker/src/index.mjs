@@ -56,6 +56,25 @@ async function requestNaver(url, env) {
   return { ok: true, status: response.status, data };
 }
 
+function summarizeTransitSteps(steps) {
+  const supportedTypes = new Set(["WALKING", "BUS", "SUBWAY"]);
+  return (Array.isArray(steps) ? steps : [])
+    .map((step) => {
+      const properties = step?.properties || {};
+      const type = String(properties.type || "");
+      const time = Number(properties.time);
+      if (!supportedTypes.has(type) || !Number.isFinite(time) || time <= 0) return null;
+
+      const vehicleNames = [...new Set((Array.isArray(properties.vehicles) ? properties.vehicles : [])
+        .map((vehicle) => String(vehicle?.name || "").trim())
+        .filter(Boolean)
+        .slice(0, 3))];
+      return { type, time, vehicleNames };
+    })
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
 async function requestKakaoTransit(body, env) {
   const query = new URLSearchParams({
     start_x: String(Number(body.startLng)),
@@ -80,9 +99,6 @@ async function requestKakaoTransit(body, env) {
     };
   }
 
-  const durationSeconds = Math.min(...(Array.isArray(data.routes) ? data.routes : [])
-    .map((route) => Number(route?.properties?.totalTime))
-    .filter((duration) => Number.isFinite(duration) && duration > 0));
   const unavailableStatuses = new Set(["NO_RESULTS", "STARTNODES_NULL", "ENDNODES_NULL", "EQUAL_POINTS"]);
   if (unavailableStatuses.has(data.status)) {
     return {
@@ -91,7 +107,11 @@ async function requestKakaoTransit(body, env) {
       data: { available: false, status: data.status },
     };
   }
-  if (data.status !== "OK" || !Number.isFinite(durationSeconds)) {
+  const bestRoute = (Array.isArray(data.routes) ? data.routes : [])
+    .map((route) => ({ route, durationSeconds: Number(route?.properties?.totalTime) }))
+    .filter(({ durationSeconds }) => Number.isFinite(durationSeconds) && durationSeconds > 0)
+    .sort((left, right) => left.durationSeconds - right.durationSeconds)[0];
+  if (data.status !== "OK" || !bestRoute) {
     return {
       ok: false,
       status: data.status === "INVALID_REQUEST" ? 400 : 502,
@@ -104,7 +124,11 @@ async function requestKakaoTransit(body, env) {
   return {
     ok: true,
     status: response.status,
-    data: { available: true, durationSeconds },
+    data: {
+      available: true,
+      durationSeconds: bestRoute.durationSeconds,
+      steps: summarizeTransitSteps(bestRoute.route?.steps),
+    },
   };
 }
 

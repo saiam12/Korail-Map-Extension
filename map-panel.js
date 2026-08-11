@@ -335,6 +335,15 @@ function initStationMap(container, popup, currentDep, currentArr) {
       .find((element) => korailStationKey(element.textContent.trim()) === name && isVisibleElement(element));
   }
 
+  function findFirstMatchingPopupStationOption(query) {
+    const normalizedQuery = String(query || "").replace(/\s+/g, "").toLocaleLowerCase();
+    if (!normalizedQuery) return null;
+    return [...popup.querySelectorAll("a, button")]
+      .filter(isNativeStationOption)
+      .find((element) => isVisibleElement(element)
+        && element.textContent.replace(/\s+/g, "").toLocaleLowerCase().includes(normalizedQuery));
+  }
+
   function isNativeStationOption(element) {
     return !element.closest(".korail-station-address-search")
       && !element.classList.contains("korail-station-map-placeholder");
@@ -827,15 +836,15 @@ function initStationMap(container, popup, currentDep, currentArr) {
       input.value = value;
       input.dispatchEvent(new Event("input", { bubbles: true }));
     };
-    if (isGlobalLocale) {
-      input.addEventListener("input", (event) => {
-        if (event.isTrusted) delete input.dataset.korailAddressSearch;
+    input.addEventListener("input", (event) => {
+      if (event.isTrusted) delete input.dataset.korailAddressSearch;
+      if (isGlobalLocale) {
         const query = input.dataset.korailAddressSearch ? "" : input.value.trim().toLowerCase();
         popup.querySelectorAll(".travel-ch_list .ch_tag").forEach((tag) => {
           tag.hidden = Boolean(query) && !tag.textContent.trim().toLowerCase().includes(query);
         });
-      });
-    }
+      }
+    });
     const renderResults = (stations, revealPointer = null, resultSortMode = sortMode.value) => {
       const readyRequest = ++addressResultsReadyRequest;
       stopAddressResultsPointerWait();
@@ -996,8 +1005,13 @@ function initStationMap(container, popup, currentDep, currentArr) {
     }, { capture: true });
     input.addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
+      const firstOption = findFirstMatchingPopupStationOption(input.value);
       event.preventDefault();
       event.stopPropagation();
+      if (firstOption) {
+        firstOption.click();
+        return;
+      }
       matchAddress();
     }, { capture: true });
     sortMode.addEventListener("change", async () => {
