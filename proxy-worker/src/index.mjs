@@ -121,13 +121,19 @@ async function requestKakaoTransit(body, env) {
       },
     };
   }
+  const steps = summarizeTransitSteps(bestRoute.route?.steps);
+  const additionalDurationSeconds = Math.max(
+    0,
+    bestRoute.durationSeconds - steps.reduce((total, step) => total + step.time, 0),
+  );
   return {
     ok: true,
     status: response.status,
     data: {
       available: true,
       durationSeconds: bestRoute.durationSeconds,
-      steps: summarizeTransitSteps(bestRoute.route?.steps),
+      steps,
+      additionalDurationSeconds,
     },
   };
 }

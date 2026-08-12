@@ -140,7 +140,7 @@
     by("[data-route-field='departure']").textContent = text("출발지", "Departure");
     by("[data-route-field='arrival']").textContent = text("도착지", "Arrival");
     by(".korail-route-search input[name='departure']").placeholder = text("예: 서울시청", "e.g. Seoul City Hall");
-    by(".korail-route-search input[name='arrival']").placeholder = text("예: 부산역", "e.g. Busan Station");
+    by(".korail-route-search input[name='arrival']").placeholder = text("예: 서울역", "e.g. Seoul Station");
     by("[data-route-submit]").textContent = text("조회", "Search");
     by("[data-route-history-label]").textContent = text("최근 기록", "History");
     by("[data-route-current-location-label]").textContent = text("현위치", "My location");

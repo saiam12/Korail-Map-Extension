@@ -925,6 +925,17 @@ waitForL(() => {
           && Number.isFinite(step.durationSeconds) && step.durationSeconds > 0)
         .map((step) => ({ ...step, durationText: formatDuration(step.durationSeconds) }))
       : [];
+    const additionalTransitDurationSeconds = transitResult.status === "fulfilled"
+      ? Number(transitResult.value?.additionalDurationSeconds)
+      : NaN;
+    if (Number.isFinite(additionalTransitDurationSeconds) && additionalTransitDurationSeconds >= 30) {
+      transitSteps.unshift({
+        type: "WALKING",
+        durationSeconds: additionalTransitDurationSeconds,
+        durationText: formatDuration(additionalTransitDurationSeconds),
+        vehicleNames: [],
+      });
+    }
 
     if (drivingResult.status === "rejected") {
       console.warn("[Korail] Route driving request failed:", drivingResult.reason);
