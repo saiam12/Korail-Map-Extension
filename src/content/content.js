@@ -1,6 +1,17 @@
 // content.js는 페이지 컨텍스트에 나머지 스크립트를 순서대로 주입하는 역할만 합니다.
 
-const FILES = ["leaflet.js", "station-data.js", "station-translations.js", "map-panel.js", "injected.js", "support-widget.js", "home-panel.js", "station-popup.js", "booking-map.js"];
+const FILES = [
+  "assets/vendor/leaflet/leaflet.js",
+  "src/data/station-data.js",
+  "src/data/station-translations.js",
+  "src/page/map-config.js",
+  "src/page/map-panel.js",
+  "src/page/injected.js",
+  "src/page/support-widget.js",
+  "src/page/home-panel.js",
+  "src/page/station-popup.js",
+  "src/page/booking-map.js",
+];
 const INJECTED_RESOURCE_VERSION = chrome.runtime.getManifest().version;
 
 window.addEventListener("message", async (event) => {
@@ -133,12 +144,6 @@ function isFreshNearestCacheEntry(entry, now = Date.now()) {
 }
 
 async function processNearestCache(request) {
-  if (request.action === "clear") {
-    await chrome.storage.local.remove(nearestCacheStorageKey);
-    respondNearestCache(request, null);
-    return;
-  }
-
   const stored = await chrome.storage.local.get(nearestCacheStorageKey);
   const storedCache = stored[nearestCacheStorageKey];
   const rawCache = storedCache && typeof storedCache === "object" && !Array.isArray(storedCache)

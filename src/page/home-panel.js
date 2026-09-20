@@ -169,16 +169,6 @@ waitForL(() => {
     return getKorailLocale() === "ko";
   }
 
-  function getRequestLanguage() {
-    return ({
-      ko: "ko",
-      en: "en",
-      jpn: "ja",
-      chn: "zh-CN",
-      tw: "zh-TW",
-    })[getKorailLocale()] || "en";
-  }
-
   // 가까운 역 버튼의 비활성 상태를 현재 화면에 맞게 갱신합니다.
 
   function updateNearestDisabledState() {
@@ -311,8 +301,6 @@ waitForL(() => {
 
     // 공간이 충분한지 확인
     const hasRightSpace = baseRect.right + gap + panelWidth <= viewportWidth - marginX;
-    //const hasLeftSpace = baseRect.left - panelWidth - gap >= marginX;
-
     if (viewportWidth <= 640 || !hasRightSpace) {
       showMiniButton(bannerRect, baseRect);
       updateNearestDisabledState();
@@ -585,13 +573,6 @@ waitForL(() => {
         : `Too many searches. Try again in ${waitSeconds} seconds.`);
     }
     nearestSearchTimestamps.push(now);
-  }
-
-  async function clearNearestSearchCache() {
-    nearestSearchCache.clear();
-    nearestSearchCacheCalculatedAt.clear();
-    nearestSearchOrigins.clear();
-    await requestNearestCache("clear");
   }
 
   // 검색 대상 역 목록을 좌표와 함께 반환합니다.
@@ -1538,8 +1519,6 @@ waitForL(() => {
     });
   }
 
-  window.injectHomeFeature = injectHomeNearestPanel;
-  
   // 날짜/인원 선택 및 광고 팝업 열림·닫힘을 감지해 nearest 패널을 즉시 비활성화합니다.
     
     
@@ -1610,6 +1589,5 @@ waitForL(() => {
     renderNearestResults,
     bindNearestHistory,
     bindNearestStationActions,
-    clearNearestSearchCache,
   };
 }); // waitForL

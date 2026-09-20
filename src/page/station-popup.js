@@ -102,6 +102,4 @@ waitForL(() => {
   }
 
   observeStationPopup();
-
-  window.KORAIL_STATION_POPUP = { observeStationPopup };
 }); // waitForL

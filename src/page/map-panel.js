@@ -31,39 +31,26 @@ function korailStationKey(label) {
 
 const GLOBAL_STATION_SELECTION_ARM_MS = 1000;
 
-function addKorailMapLabelToggle(map, maxZoom) {
-  if (window.KORAIL_I18N?.getLocale?.() === "ko") return;
+function addKorailBaseLayer(map, maxZoom) {
+  const cartoTileProxyUrl = window.KORAIL_MAP_CONFIG?.cartoTileProxyUrl?.replace(/\/+$/, "");
+  if (cartoTileProxyUrl) {
+    L.tileLayer(`${cartoTileProxyUrl}/{z}/{x}/{y}.png`, {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      maxZoom,
+    }).addTo(map);
+    return;
+  }
 
-  const labelPane = map.createPane("korailLabelPane");
-  labelPane.style.zIndex = "350";
-  labelPane.style.pointerEvents = "none";
+  const pane = map.createPane("korailBasePane");
+  pane.style.zIndex = "200";
+  pane.style.filter = "grayscale(1) contrast(0.45) brightness(1.25)";
+  pane.style.opacity = "0.55";
 
-  const labelLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}.png", {
-    minZoom: 8,
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom,
-    pane: "korailLabelPane",
-  });
-
-  const LabelToggleControl = L.Control.extend({
-    options: { position: "topright" },
-    onAdd() {
-      const control = L.DomUtil.create("div", "korail-map-label-control leaflet-control");
-      const labelText = "Labels";
-      control.innerHTML = `<label><span>${labelText}</span><input type="checkbox" aria-label="${labelText}"><span class="korail-map-label-control__switch" aria-hidden="true"></span></label>`;
-      L.DomEvent.disableClickPropagation(control);
-      L.DomEvent.disableScrollPropagation(control);
-      control.querySelector("input").addEventListener("change", (event) => {
-        if (event.target.checked) {
-          if (!map.hasLayer(labelLayer)) labelLayer.addTo(map);
-        } else if (map.hasLayer(labelLayer)) {
-          map.removeLayer(labelLayer);
-        }
-      });
-      return control;
-    },
-  });
-
-  new LabelToggleControl().addTo(map);
+    pane: "korailBasePane",
+  }).addTo(map);
 }
 
 function renderMap(container, dep, arr, stations, fullRoute) {
@@ -93,11 +80,7 @@ function initMap(container, dep, arr, stations, fullRoute) {
     zoomDelta: 0.5,
   }).setView([mid.lat, mid.lng], 7);
 
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png", {
-    attribution: "© OpenStreetMap © CARTO",
-    maxZoom: 16,
-  }).addTo(map);
-  addKorailMapLabelToggle(map, 16);
+  addKorailBaseLayer(map, 16);
 
   const selectedNames = new Set(stations.map((s) => s.name));
 
@@ -125,8 +108,6 @@ function initMap(container, dep, arr, stations, fullRoute) {
     const isInRoute = selectedNames.has(name);
 
     const dotClass = isDep ? "is-dep" : isArr ? "is-arr" : isInRoute ? "is-active" : "is-gray";
-    const labelClass = isDep ? "is-dep" : isArr ? "is-arr" : "";
-
     const icon = L.divIcon({
       className: "korail-station-marker",
       html: `<div class="korail-dot-wrap ${isDep || isArr ? "is-label" : ""}">
@@ -184,10 +165,7 @@ function initStationMap(container, popup, currentDep, currentArr) {
   hoverPane.style.zIndex = "700";
   hoverPane.style.pointerEvents = "none";
 
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png", {
-    maxZoom: 12,
-  }).addTo(map);
-  addKorailMapLabelToggle(map, 12);
+  addKorailBaseLayer(map, 12);
   const stationRenderer = L.canvas({ padding: 0.5 });
   const stationMarkerBorderWeight = 1.5;
   const stationMarkerRadius = (isMajor) => ((isMajor ? 11 : 9) - stationMarkerBorderWeight) / 2;
@@ -643,23 +621,6 @@ function initStationMap(container, popup, currentDep, currentArr) {
       });
     });
   }
-
-  function attachRegionHover(regionList) {
-    regionList.querySelectorAll("a, button").forEach((a) => {
-      if (a._korailRegionHoverBound) return;
-      a._korailRegionHoverBound = true;
-      a.addEventListener("mouseenter", () => {
-        // 선택된(active) 지역일 때만 트래킹
-        const isActive = a.closest("li")?.classList.contains("active") ||
-                        a.classList.contains("active") ||
-                        a.closest(".ch_tag")?.classList.contains("active");
-        if (!isActive) return;
-        const regionName = a.textContent.trim();
-        const stationNames = (REGION_STATIONS[regionName] || []).filter(n => STATIONS[n]);
-        moveToRegionStations(stationNames, true);
-      });
-    });
-  } 
 
   function addAddressStationSearch() {
     if (popup.querySelector(".korail-station-address-search")) return;
@@ -1185,7 +1146,6 @@ function initStationMap(container, popup, currentDep, currentArr) {
         });
       });
 
-      //attachRegionHover(regionList);
       attachStationHover(stationList);
 
     } else {

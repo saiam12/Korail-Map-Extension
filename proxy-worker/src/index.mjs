@@ -1,5 +1,6 @@
 const NAVER_MAPS_BASE_URL = "https://maps.apigw.ntruss.com";
 const KAKAO_TRANSIT_URL = "https://dapi.kakao.com/v2/routing/publictraffic";
+const CARTO_BASEMAP_URL = "https://basemaps.cartocdn.com/rastertiles/light_nolabels";
 
 function json(data, status = 200, origin = "", extraHeaders = {}) {
   const headers = {
@@ -25,6 +26,47 @@ function allowedExtensionIds(env) {
 function extensionIdFromOrigin(origin) {
   const match = /^chrome-extension:\/\/([a-p]{32})$/.exec(origin || "");
   return match?.[1] || "";
+}
+
+function isKorailPageRequest(request) {
+  const source = request.headers.get("Referer") || request.headers.get("Origin") || "";
+  try {
+    const url = new URL(source);
+    return url.protocol === "https:" && ["korail.com", "www.korail.com"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function requestCartoTile(request, env, tileMatch) {
+  if (!isKorailPageRequest(request)) return new Response(null, { status: 403 });
+  if (!env.CARTO_BASEMAP_KEY) return new Response(null, { status: 503 });
+
+  const [, zoomText, xText, yText] = tileMatch;
+  const zoom = Number(zoomText);
+  const x = Number(xText);
+  const y = Number(yText);
+  const tileCount = 2 ** zoom;
+  if (zoom > 16 || x >= tileCount || y >= tileCount) return new Response(null, { status: 400 });
+
+  if (env.MAPS_RATE_LIMITER) {
+    const clientIp = request.headers.get("CF-Connecting-IP") || "unknown";
+    const { success } = await env.MAPS_RATE_LIMITER.limit({ key: `tile:${clientIp}` });
+    if (!success) return new Response(null, { status: 429, headers: { "Retry-After": "60" } });
+  }
+
+  const upstream = await fetch(`${CARTO_BASEMAP_URL}/${zoom}/${x}/${y}.png?key=${encodeURIComponent(env.CARTO_BASEMAP_KEY)}`, {
+    cf: { cacheEverything: true, cacheTtl: 86400 },
+  });
+  if (!upstream.ok) return new Response(null, { status: upstream.status });
+  return new Response(upstream.body, {
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "public, max-age=86400",
+      "Content-Type": upstream.headers.get("Content-Type") || "image/png",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
 }
 
 function isCoordinate(value, min, max) {
@@ -180,6 +222,12 @@ export default {
     const origin = request.headers.get("Origin") || "";
     const configuredIds = allowedExtensionIds(env);
     const originExtensionId = extensionIdFromOrigin(origin);
+    const pathname = new URL(request.url).pathname;
+    const tileMatch = /^\/v1\/tiles\/(\d{1,2})\/(\d+)\/(\d+)\.png$/.exec(pathname);
+
+    if (request.method === "GET" && tileMatch) {
+      return requestCartoTile(request, env, tileMatch);
+    }
 
     if (request.method === "OPTIONS") {
       if (!originExtensionId || !configuredIds.includes(originExtensionId)) {
@@ -197,7 +245,6 @@ export default {
       });
     }
 
-    const pathname = new URL(request.url).pathname;
     if (request.method !== "POST" || !["/v1/maps", "/v1/geocode", "/v1/reverse-geocode", "/v1/transit"].includes(pathname)) {
       return json({ error: "Not found." }, 404, origin);
     }

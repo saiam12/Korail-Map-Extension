@@ -11,19 +11,19 @@ waitForL(() => {
   } = window.KORAIL_SHARED;
   const { cleanup, cleanupHomeNearestPanel, isLoginPage, updateNearestDisabledState, positionHomeNearestPanel, injectHomeNearestPanel } = window.KORAIL_HOME;
 
-  var selectedTrainRow = null;
-  var selectedTrainRowVersion = 0;
-  var selectedTrainStationGroups = [];
-  var selectedTransferRouteKey = "";
-  var selectedTransferSegmentIndexes = new Set();
-  var currentBookingDep = "";
-  var currentBookingArr = "";
-  var userTrainTimeReadVersion = 0;
-  var userTrainFareReadVersion = 0;
-  var userTrainTimeClickBound = false;
-  var userTrainFareClickBound = false;
-  var trainRowClickBound = false;
-  var globalTrainMapSelectionVersion = 0;
+  let selectedTrainRow = null;
+  let selectedTrainRowVersion = 0;
+  let selectedTrainStationGroups = [];
+  let selectedTransferRouteKey = "";
+  let selectedTransferSegmentIndexes = new Set();
+  let currentBookingDep = "";
+  let currentBookingArr = "";
+  let userTrainTimeReadVersion = 0;
+  let userTrainFareReadVersion = 0;
+  let userTrainTimeClickBound = false;
+  let userTrainFareClickBound = false;
+  let trainRowClickBound = false;
+  let globalTrainMapSelectionVersion = 0;
   const trainScheduleCache = new Map();
   const trainFareCache = new Map();
   const trainFareMetadataCache = new WeakMap();
@@ -510,8 +510,6 @@ const TRAIN_TIME_LABELS = [
   "Giờ tàu", "Giờ khởi hành", "ตารางเวลา", "เวลาเดินรถ", "Jadwal Kereta", "Waktu Kereta",
 ];
 const TRAIN_FARE_LABELS = ["운임요금", "Train Fare", "Fare"];
-// const randomNumber = Math.floor(Math.random() * 101) + 100;
-
 function isTrainTimeButton(el) {
   const text = (el?.textContent || el?.getAttribute?.("aria-label") || "").trim().toLocaleLowerCase();
   return TRAIN_TIME_LABELS.some((label) => text.includes(label.toLocaleLowerCase()));
@@ -1067,20 +1065,6 @@ function getNextTransferSelection(previousKey, previousIndexes, routeKey, clicke
   const safeIndex = Math.max(0, Math.min(clickedIndex, Math.max(segmentCount - 1, 0)));
   next.add(safeIndex);
   return next;
-}
-
-// 환승 구간에서 파란색으로 표시할 활성 정차역을 계산합니다.
-
-function getTransferActiveStations(stationNames, segment, transferInfo) {
-  if (!stationNames.length) return [];
-  if (!segment || transferInfo.rows.length <= 1) return stationNames;
-
-  const isFirst = transferInfo.index === 0;
-  const isLast = transferInfo.index === transferInfo.rows.length - 1;
-  const from = isFirst ? stationNames[0] : segment.dep;
-  const to = isLast ? stationNames.at(-1) : segment.arr;
-  const side = isFirst ? "leading" : isLast ? "trailing" : "auto";
-  return sliceTrainStations(stationNames, from, to, side);
 }
 
 // 열차시각 모달에서 정차역 목록을 추출합니다.
@@ -1736,28 +1720,6 @@ function getLoadedTransferFareItems(trainTable) {
   return items;
 }
 
-function getLoadedGlobalFareItems(trainTable) {
-  const rows = [];
-  const handledRows = new Set();
-  getGlobalTrainRows(trainTable).forEach((routeRow) => {
-    let fareRow = routeRow;
-    while (
-      fareRow?.parentElement
-      && fareRow !== trainTable
-      && !fareRow.querySelector?.(".price_box")
-    ) fareRow = fareRow.parentElement;
-    if (!fareRow?.querySelector?.(".price_box")) fareRow = routeRow;
-    if (handledRows.has(fareRow)) return;
-    handledRows.add(fareRow);
-
-    const segments = getTrainRowSegments(fareRow);
-    (segments.length ? segments : [null]).forEach((segment, segmentIndex) => {
-      rows.push({ row: fareRow, segment, segmentIndex });
-    });
-  });
-  return rows;
-}
-
 function getSelectedGlobalFareItems(trainTable) {
   if (!selectedTrainRow?.isConnected || !trainTable.contains(selectedTrainRow)) return [];
   return getConnectedTrainRows(selectedTrainRow)
@@ -2282,20 +2244,6 @@ function isVisibleElement(el) {
     && rect.right > 0
     && rect.top < window.innerHeight
     && rect.left < window.innerWidth;
-}
-
-// 하단 바에서 열차시각 버튼을 찾습니다.
-
-function findBottomTrainTimeButton() {
-  return [...document.querySelectorAll("a, button")]
-    .filter((el) => {
-      const text = (el.textContent || el.getAttribute("aria-label") || "").trim();
-      return isTrainTimeButton(el)
-        && !el.closest(".tckWrap")
-        && !el.closest(".ReactModal__Content")
-        && isVisibleButton(el);
-    })
-    .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0] || null;
 }
 
 function findBottomTrainFareButtons() {

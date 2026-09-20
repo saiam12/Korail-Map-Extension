@@ -4,6 +4,4 @@ proxy-worker/wrangler.toml
 AGENTS.md
 skill.md
 dist/
-icons/
-package-extension.ps1
 *.zip

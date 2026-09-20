@@ -1,7 +1,5 @@
 // 페이지 컨텍스트에서 실행됩니다. Leaflet, STATIONS, renderMap 모두 사용 가능합니다.
 
-window.injectHomeFeature = window.injectHomeFeature || function noopKorailHomeFeature() {};
-
 // L이 정의될 때까지 대기 (혹시 로드 타이밍 차이가 있을 경우 대비)
 // Leaflet이 준비될 때까지 기다린 뒤 콜백을 실행합니다.
 function waitForL(cb) {
@@ -119,10 +117,6 @@ waitForL(() => {
     ]
       .map(([ko, label]) => [normalizeStationLabel(label), ko])
   );
-  const STATION_KEY_BY_EN = Object.fromEntries(
-    Object.entries(STATION_EN).map(([ko, en]) => [normalizeStationLabel(en), ko])
-  );
-
   // 현재 페이지 언어를 감지합니다. UI 문구가 없는 언어는 영어 문구를 fallback으로 사용합니다.
 
   function getKorailLocale() {
@@ -271,11 +265,7 @@ waitForL(() => {
     HOME_PANEL_ID,
     QUICK_MENU_TEXTS,
     TEXT,
-    STATION_TRANSLATIONS,
     STATION_EN,
-    STATION_DISPLAY_NAMES,
-    STATION_KEY_BY_EN,
-    STATION_KEY_BY_LABEL,
     normalizeStationLabel,
     getKorailLocale,
     t,
@@ -285,6 +275,6 @@ waitForL(() => {
     getCurrentStationKey,
     isVisibleFullMenuOpen,
   };
-  window.KORAIL_I18N = { getLocale: getKorailLocale, t, stationName, stationKey };
+  window.KORAIL_I18N = { getLocale: getKorailLocale, stationName, stationKey };
 
 }); // waitForL

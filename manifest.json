@@ -3,15 +3,15 @@
   "name": "Korail Route Map | 코레일 노선 지도",
   "version": "2.1",
   "icons": {
-    "16": "icons/icon-16.png",
-    "32": "icons/icon-32.png",
-    "48": "icons/icon-48.png",
-    "128": "icons/icon-128.png"
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
   },
   "description": "Korail 열차 검색 결과에 정차역 지도를 표시합니다",
   "permissions": ["geolocation", "storage"],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "src/background/background.js"
   },
   "host_permissions": [
     "https://www.korail.com/*",
@@ -22,25 +22,26 @@
   "content_scripts": [
     {
       "matches": ["https://www.korail.com/*", "https://korail.com/*"],
-      "js": ["content.js"],
-      "css": ["panel.css", "leaflet.css"],
+      "js": ["src/content/content.js"],
+      "css": ["assets/styles/panel.css", "assets/vendor/leaflet/leaflet.css"],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
       "resources": [
-        "leaflet.js",
-        "leaflet.css",
-        "leaflet-images/*.png",
-        "station-data.js",
-        "station-translations.js",
-        "map-panel.js",
-        "support-widget.js",
-        "home-panel.js",
-        "station-popup.js",
-        "booking-map.js",
-        "injected.js"
+        "assets/vendor/leaflet/leaflet.js",
+        "assets/vendor/leaflet/leaflet.css",
+        "assets/vendor/leaflet/leaflet-images/*.png",
+        "src/data/station-data.js",
+        "src/data/station-translations.js",
+        "src/page/map-config.js",
+        "src/page/map-panel.js",
+        "src/page/support-widget.js",
+        "src/page/home-panel.js",
+        "src/page/station-popup.js",
+        "src/page/booking-map.js",
+        "src/page/injected.js"
       ],
       "matches": ["https://www.korail.com/*", "https://korail.com/*"]
     }
