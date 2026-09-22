@@ -14,11 +14,10 @@ npx wrangler login
 npx wrangler secret put NAVER_CLIENT_ID
 npx wrangler secret put NAVER_CLIENT_SECRET
 npx wrangler secret put KAKAO_REST_API_KEY
-npx wrangler secret put CARTO_BASEMAP_KEY
 ```
 
 카카오디벨로퍼스에서 앱의 카카오맵 API를 활성화한 뒤 REST API 키를 `KAKAO_REST_API_KEY`로 등록합니다.
-CARTO Basemaps 키는 확장 프로그램에 포함하지 않고 `CARTO_BASEMAP_KEY` Worker Secret으로 등록합니다.
+CARTO Basemaps는 Worker를 거치지 않고 확장 프로그램에서 직접 요청합니다. 키는 `src/page/map-config.js`에 설정하고 CARTO 대시보드에서 `korail.com`과 `www.korail.com` Referer만 허용합니다.
 
 `wrangler.toml`의 `ALLOWED_EXTENSION_IDS`를 Chrome 웹스토어에서 할당받은 확장 프로그램 ID로 변경합니다. 여러 ID는 쉼표로 구분할 수 있습니다.
 

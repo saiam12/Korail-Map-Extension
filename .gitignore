@@ -1,6 +1,8 @@
 proxy-worker/.dev.vars
 proxy-worker/.wrangler/
 proxy-worker/wrangler.toml
+/.wrangler/
+src/page/map-config.js
 AGENTS.md
 skill.md
 dist/

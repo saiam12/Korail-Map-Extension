@@ -32,11 +32,12 @@ function korailStationKey(label) {
 const GLOBAL_STATION_SELECTION_ARM_MS = 1000;
 
 function addKorailBaseLayer(map, maxZoom) {
-  const cartoTileProxyUrl = window.KORAIL_MAP_CONFIG?.cartoTileProxyUrl?.replace(/\/+$/, "");
-  if (cartoTileProxyUrl) {
-    L.tileLayer(`${cartoTileProxyUrl}/{z}/{x}/{y}.png`, {
+  const cartoBasemapKey = window.KORAIL_MAP_CONFIG?.cartoBasemapKey;
+  if (cartoBasemapKey) {
+    L.tileLayer(`https://{s}.basemaps.cartocdn.com/rastertiles/light_nolabels/{z}/{x}/{y}.png?key=${encodeURIComponent(cartoBasemapKey)}`, {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
       maxZoom,
+      subdomains: "abcd",
     }).addTo(map);
     return;
   }

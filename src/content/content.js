@@ -1,5 +1,10 @@
 // content.js는 페이지 컨텍스트에 나머지 스크립트를 순서대로 주입하는 역할만 합니다.
 
+const {
+  TYPES: MESSAGE_TYPES,
+  isValidPageRequest,
+} = globalThis.KORAIL_MESSAGE_CONTRACT;
+
 const FILES = [
   "assets/vendor/leaflet/leaflet.js",
   "src/data/station-data.js",
@@ -8,8 +13,13 @@ const FILES = [
   "src/page/map-panel.js",
   "src/page/injected.js",
   "src/page/support-widget.js",
+  "src/page/home/location-service.js",
+  "src/page/home/route-service.js",
   "src/page/home-panel.js",
   "src/page/station-popup.js",
+  "src/page/booking/station-picker.js",
+  "src/page/booking/train-schedule.js",
+  "src/page/booking/train-fare.js",
   "src/page/booking-map.js",
 ];
 const INJECTED_RESOURCE_VERSION = chrome.runtime.getManifest().version;
@@ -19,10 +29,10 @@ window.addEventListener("message", async (event) => {
   const request = event.data;
   if (!request || typeof request.requestId !== "string" || request.requestId.length > 100) return;
 
-  if (request.type === "KORAIL_CURRENT_LOCATION_REQUEST") {
+  if (request.type === MESSAGE_TYPES.CURRENT_LOCATION_REQUEST) {
     if (navigator.userActivation?.isActive !== true) {
       window.postMessage({
-        type: "KORAIL_CURRENT_LOCATION_RESPONSE",
+        type: MESSAGE_TYPES.CURRENT_LOCATION_RESPONSE,
         requestId: request.requestId,
         ok: false,
         error: "Location access requires a user action.",
@@ -33,35 +43,35 @@ window.addEventListener("message", async (event) => {
     return;
   }
 
-  if (request.type === "KORAIL_NEAREST_CACHE_REQUEST") {
+  if (request.type === MESSAGE_TYPES.NEAREST_CACHE_REQUEST) {
     handleNearestCache(request);
     return;
   }
 
-  if (request.type === "KORAIL_ROUTE_HISTORY_REQUEST") {
+  if (request.type === MESSAGE_TYPES.ROUTE_HISTORY_REQUEST) {
     handleRouteHistory(request);
     return;
   }
 
-  if (request.type === "KORAIL_SUPPORT_SUBMIT") {
+  if (request.type === MESSAGE_TYPES.SUPPORT_SUBMIT) {
     if (!isValidPageRequest(request)) return;
     try {
       const result = await submitSupportFeedback(request.payload);
-      window.postMessage({ type: "KORAIL_SUPPORT_RESPONSE", requestId: request.requestId, ok: true, result }, "*");
+      window.postMessage({ type: MESSAGE_TYPES.SUPPORT_RESPONSE, requestId: request.requestId, ok: true, result }, "*");
     } catch (error) {
-      window.postMessage({ type: "KORAIL_SUPPORT_RESPONSE", requestId: request.requestId, ok: false, error: error.message || "Feedback submission failed." }, "*");
+      window.postMessage({ type: MESSAGE_TYPES.SUPPORT_RESPONSE, requestId: request.requestId, ok: false, error: error.message || "Feedback submission failed." }, "*");
     }
     return;
   }
 
-  if (request.type !== "KORAIL_MAP_API_REQUEST") return;
+  if (request.type !== MESSAGE_TYPES.MAP_API_REQUEST) return;
   if (!isValidPageRequest(request)) return;
 
   try {
     const response = await sendToBackground(request);
 
     window.postMessage({
-      type: "KORAIL_MAP_API_RESPONSE",
+      type: MESSAGE_TYPES.MAP_API_RESPONSE,
       requestId: request.requestId,
       ok: response?.ok === true,
       data: response?.data,
@@ -70,7 +80,7 @@ window.addEventListener("message", async (event) => {
     }, "*");
   } catch (error) {
     window.postMessage({
-      type: "KORAIL_MAP_API_RESPONSE",
+      type: MESSAGE_TYPES.MAP_API_RESPONSE,
       requestId: request.requestId,
       ok: false,
       error: error.message || "API request failed.",
@@ -80,39 +90,13 @@ window.addEventListener("message", async (event) => {
 
 async function submitSupportFeedback(payload) {
   const response = await sendToBackground({
-    type: "KORAIL_SUPPORT_SUBMIT",
+    type: MESSAGE_TYPES.SUPPORT_SUBMIT,
     payload,
   });
   if (response?.ok !== true || response?.data?.accepted !== true) {
     throw new Error(response?.error || "Feedback submission failed.");
   }
   return response.data;
-}
-
-function isValidPageRequest(request) {
-  if (request.type === "KORAIL_SUPPORT_SUBMIT") {
-    const payload = request.payload;
-    return payload && typeof payload === "object"
-      && ["bug", "suggestion", "other"].includes(payload.category)
-      && typeof payload.message === "string" && payload.message.length <= 4000
-      && typeof payload.contact === "string" && payload.contact.length <= 200;
-  }
-  if (request.type !== "KORAIL_MAP_API_REQUEST") return false;
-  if (request.kind === "geocode" || request.kind === "locationGeocode") {
-    return typeof request.address === "string" && request.address.length <= 200;
-  }
-  if (request.kind === "driving" || request.kind === "transit") {
-    return [request.startLat, request.startLng, request.goalLat, request.goalLng].every(Number.isFinite);
-  }
-  if (request.kind === "trainSchedule") {
-    return /^\d{8}$/.test(request.runDate || "")
-      && /^\d{1,6}$/.test(request.trainNo || "")
-      && /^\d{0,6}$/.test(request.trainGroupCode || "");
-  }
-  return request.kind === "locationReverse"
-    && Number.isFinite(request.lat)
-    && Number.isFinite(request.lng)
-    && (!request.language || ["kor", "eng"].includes(request.language));
 }
 
 const nearestCacheStorageKey = "korail-nearest-search-cache-v1";
@@ -127,7 +111,7 @@ function handleNearestCache(request) {
     .then(() => processNearestCache(request))
     .catch((error) => {
       window.postMessage({
-        type: "KORAIL_NEAREST_CACHE_RESPONSE",
+        type: MESSAGE_TYPES.NEAREST_CACHE_RESPONSE,
         requestId: request.requestId,
         ok: false,
         error: error.message || "Nearest cache failed.",
@@ -232,7 +216,7 @@ async function processNearestCache(request) {
 
 function respondNearestCache(request, entry) {
   window.postMessage({
-    type: "KORAIL_NEAREST_CACHE_RESPONSE",
+    type: MESSAGE_TYPES.NEAREST_CACHE_RESPONSE,
     requestId: request.requestId,
     ok: true,
     entry,
@@ -260,7 +244,7 @@ function handleRouteHistory(request) {
     .then(() => processRouteHistory(request))
     .catch((error) => {
       window.postMessage({
-        type: "KORAIL_ROUTE_HISTORY_RESPONSE",
+        type: MESSAGE_TYPES.ROUTE_HISTORY_RESPONSE,
         requestId: request.requestId,
         ok: false,
         error: error.message || "Route history failed.",
@@ -323,7 +307,7 @@ async function processRouteHistory(request) {
 
 function respondRouteHistory(request, entries) {
   window.postMessage({
-    type: "KORAIL_ROUTE_HISTORY_RESPONSE",
+    type: MESSAGE_TYPES.ROUTE_HISTORY_RESPONSE,
     requestId: request.requestId,
     ok: true,
     entries,
@@ -332,18 +316,18 @@ function respondRouteHistory(request, entries) {
 
 function requestCurrentLocation(requestId) {
   if (!navigator.geolocation) {
-    window.postMessage({ type: "KORAIL_CURRENT_LOCATION_RESPONSE", requestId, ok: false, error: "Geolocation is unavailable." }, "*");
+    window.postMessage({ type: MESSAGE_TYPES.CURRENT_LOCATION_RESPONSE, requestId, ok: false, error: "Geolocation is unavailable." }, "*");
     return;
   }
 
   navigator.geolocation.getCurrentPosition(
     (position) => window.postMessage({
-      type: "KORAIL_CURRENT_LOCATION_RESPONSE",
+      type: MESSAGE_TYPES.CURRENT_LOCATION_RESPONSE,
       requestId,
       ok: true,
       data: { lat: position.coords.latitude, lng: position.coords.longitude },
     }, "*"),
-    () => window.postMessage({ type: "KORAIL_CURRENT_LOCATION_RESPONSE", requestId, ok: false, error: "Location permission was denied." }, "*"),
+    () => window.postMessage({ type: MESSAGE_TYPES.CURRENT_LOCATION_RESPONSE, requestId, ok: false, error: "Location permission was denied." }, "*"),
     { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
   );
 }

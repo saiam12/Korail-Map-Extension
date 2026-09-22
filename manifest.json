@@ -22,7 +22,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.korail.com/*", "https://korail.com/*"],
-      "js": ["src/content/content.js"],
+      "js": ["src/shared/message-contract.js", "src/content/content.js"],
       "css": ["assets/styles/panel.css", "assets/vendor/leaflet/leaflet.css"],
       "run_at": "document_idle"
     }
@@ -38,8 +38,13 @@
         "src/page/map-config.js",
         "src/page/map-panel.js",
         "src/page/support-widget.js",
+        "src/page/home/location-service.js",
+        "src/page/home/route-service.js",
         "src/page/home-panel.js",
         "src/page/station-popup.js",
+        "src/page/booking/station-picker.js",
+        "src/page/booking/train-schedule.js",
+        "src/page/booking/train-fare.js",
         "src/page/booking-map.js",
         "src/page/injected.js"
       ],

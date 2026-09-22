@@ -10,6 +10,17 @@ waitForL(() => {
     isVisibleFullMenuOpen,
   } = window.KORAIL_SHARED;
   const { cleanup, cleanupHomeNearestPanel, isLoginPage, updateNearestDisabledState, positionHomeNearestPanel, injectHomeNearestPanel } = window.KORAIL_HOME;
+  const {
+    normalizeTrainNumber,
+    normalizeTrainRunDate,
+    normalizeTrainScheduleMetadata,
+  } = window.KORAIL_BOOKING_SCHEDULE;
+  const {
+    calculateStandingTrainFare,
+    calculateTransferTrainFare,
+    getTrainFareCacheKey,
+    normalizeTrainFareEntries,
+  } = window.KORAIL_BOOKING_FARE;
 
   let selectedTrainRow = null;
   let selectedTrainRowVersion = 0;
@@ -39,154 +50,25 @@ waitForL(() => {
   const GLOBAL_TRAIN_FARE_INTERACTION_PAUSE_MS = 500;
   const isTrainTimeAutomationEnabled = () => true;
 
-  function getStationFields(type) {
-    const selectors = type === "dep"
-      ? ["#labelstart", "#txtGoStart", ".station_item.n1 span.input", "input[id*='start' i]", "input[name*='start' i]", "input[id*='dep' i]", "input[name*='dep' i]", "a.btn_pop.btn_start"]
-      : ["#labelend", "#txtGoEnd", ".station_item.n2 span.input", "input[id*='end' i]", "input[name*='end' i]", "input[id*='arr' i]", "input[name*='arr' i]", "a.btn_pop.btn_end"];
-
-    return [...new Set(selectors.flatMap((selector) => [...document.querySelectorAll(selector)]))];
-  }
+  const stationPicker = window.KORAIL_BOOKING_STATION_PICKER.create({
+    isGlobalTicketPage,
+    stationName,
+    getCurrentStationKey,
+    findStationKeyInText,
+  });
 
   function findVisibleStationField(type) {
-    if (isGlobalTicketPage()) {
-      const globalSelector = type === "dep" ? "a.btn_pop.btn_start" : "a.btn_pop.btn_end";
-      const globalField = [...document.querySelectorAll(globalSelector)].find((el) => {
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
-      });
-      if (globalField) return globalField;
-    }
-    return getStationFields(type).find((el) => {
-      const rect = el.getBoundingClientRect();
-      const style = getComputedStyle(el);
-      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
-    }) || null;
-  }
-
-  function getStationFieldValue(field) {
-    return String(("value" in field && typeof field.value === "string") ? field.value : field.textContent || "").trim();
-  }
-
-  function normalizeStationOptionText(value) {
-    return String(value || "").replace(/\s+/g, "").toLocaleLowerCase();
-  }
-
-  function matchesStationOption(el, stationName) {
-    const text = normalizeStationOptionText(el.textContent);
-    const name = normalizeStationOptionText(stationName);
-    return text === name || text === `${name}station` || text === `${name}역`;
-  }
-
-  function findStationPickerByOption(stationName) {
-    const matchingNodes = [...document.querySelectorAll("button, a, [role='button'], li, span, strong")]
-      .filter((el) => matchesStationOption(el, stationName));
-
-    for (const node of matchingNodes) {
-      let container = node.parentElement;
-      while (container && container !== document.body) {
-        const rect = container.getBoundingClientRect();
-        const optionCount = container.querySelectorAll("button, a, [role='button'], li").length;
-        const style = getComputedStyle(container);
-        const isOverlay = style.position === "fixed"
-          || container.matches(".layerWrap, .layer_wrap, [role='dialog'], [class*='popup'], [class*='modal']");
-        if (isOverlay && rect.width > 0 && rect.height > 0 && optionCount >= 4) return container;
-        container = container.parentElement;
-      }
-    }
-    return null;
-  }
-
-  function waitForStationPicker(stationName, timeout = 3000) {
-    return new Promise((resolve) => {
-      const startedAt = Date.now();
-      function findPicker() {
-        const optionPicker = findStationPickerByOption(stationName);
-        if (optionPicker) return resolve(optionPicker);
-
-        const pickerSelector = ".layerWrap, .layer_wrap, [role='dialog'], [class*='popup'], [class*='modal']";
-        const searchInput = [...document.querySelectorAll("input")].find((input) => {
-          return /역\s*이름|초성\s*검색|station|search/i.test(input.placeholder || "")
-            && input.closest(pickerSelector);
-        });
-        if (searchInput) {
-          const picker = searchInput.closest(pickerSelector);
-          if (picker && picker.getBoundingClientRect().width > 0) return resolve(picker);
-        }
-        if (Date.now() - startedAt >= timeout) return resolve(null);
-        requestAnimationFrame(findPicker);
-      }
-      findPicker();
-    });
-  }
-
-  function findStationPickerOption(picker, stationName) {
-    return [...picker.querySelectorAll("button, a, [role='button'], li, span, strong")]
-      .filter((el) => matchesStationOption(el, stationName))
-      .map((el) => el.closest("button, a, [role='button'], li") || el)
-      .sort((a, b) => Number(!a.matches("button, a, [role='button']")) - Number(!b.matches("button, a, [role='button']")))
-      .find((el) => {
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
-      }) || null;
-  }
-
-  function findVisibleStationPickerTrigger(type) {
-    const selector = type === "dep" ? "a.btn_pop.btn_start" : "a.btn_pop.btn_end";
-    return [...document.querySelectorAll(selector)].find((el) => {
-      const rect = el.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
-    }) || null;
-  }
-
-  function waitForStationPickerTrigger(type, timeout = 3000) {
-    return new Promise((resolve) => {
-      const startedAt = Date.now();
-      function findTrigger() {
-        const trigger = findVisibleStationPickerTrigger(type);
-        if (trigger || Date.now() - startedAt >= timeout) return resolve(trigger);
-        requestAnimationFrame(findTrigger);
-      }
-      findTrigger();
-    });
+    return stationPicker.findVisibleStationField(type);
   }
 
   async function chooseStationThroughPicker(type, stationName) {
-    let trigger = findVisibleStationPickerTrigger(type);
-    if (!trigger && location.pathname.includes("/intro")) {
-      document.querySelector("button.search_btn")?.click();
-      trigger = await waitForStationPickerTrigger(type);
-    }
-    if (!trigger) return false;
-
-    trigger.click();
-    const picker = await waitForStationPicker(stationName);
-    const option = picker && findStationPickerOption(picker, stationName);
-    if (!option) {
-      const closeButton = picker && [...picker.querySelectorAll("button, a")].find((el) => {
-        return /close|닫기|×|✕/i.test(`${el.textContent || ""} ${el.getAttribute("aria-label") || ""} ${el.title || ""}`);
-      });
-      closeButton?.click();
-      return false;
-    }
-
-    option.click();
-    return true;
+    return stationPicker.chooseStationThroughPicker(type, stationName);
   }
 
   window.KORAIL_BOOKING = { chooseStationThroughPicker };
 
   async function swapStationsThroughPicker(depField, arrField) {
-    const displayedDep = getStationFieldValue(depField);
-    const displayedArr = getStationFieldValue(arrField);
-    const depKey = getCurrentStationKey("dep") || findStationKeyInText(displayedDep);
-    const arrKey = getCurrentStationKey("arr") || findStationKeyInText(displayedArr);
-    const depStation = depKey ? stationName(depKey) : displayedDep;
-    const arrStation = arrKey ? stationName(arrKey) : displayedArr;
-    if (!depStation || !arrStation) return false;
-
-    const departureChanged = await chooseStationThroughPicker("dep", arrStation);
-    if (!departureChanged) return false;
-    return chooseStationThroughPicker("arr", depStation);
+    return stationPicker.swapStationsThroughPicker(depField, arrField);
   }
 
   function shrinkVisibleStartField() {
@@ -1385,36 +1267,6 @@ function setSelectedTrainFallback(dep, arr, rows, activeSegmentIndexes) {
   }
 }
 
-function normalizeTrainRunDate(value) {
-  const text = String(value || "");
-  const compact = text.match(/20\d{6}/)?.[0];
-  if (compact) return compact;
-  const separated = text.match(/(20\d{2})\D+(\d{1,2})\D+(\d{1,2})/);
-  if (!separated) return "";
-  return `${separated[1]}${separated[2].padStart(2, "0")}${separated[3].padStart(2, "0")}`;
-}
-
-function normalizeTrainNumber(value) {
-  const trainNo = String(value || "").trim();
-  if (!/^\d{1,6}$/.test(trainNo)) return "";
-  return trainNo.replace(/^0+(?=\d)/, "");
-}
-
-function normalizeTrainScheduleMetadata(value) {
-  if (!value || typeof value !== "object") return null;
-  const trainNo = normalizeTrainNumber(value.h_trn_no ?? value.trnNo ?? value.txtTrnNo ?? "");
-  if (!trainNo) return null;
-  return {
-    trainNo,
-    runDate: normalizeTrainRunDate(
-      value.h_run_dt ?? value.runDt ?? value.txtRunDt ?? value.h_dpt_dt ?? value.dptDt,
-    ),
-    trainGroupCode: String(
-      value.h_trn_gp_cd ?? value.trnGpCd ?? value.txtTrnGpCd ?? value.h_trn_clsf_cd ?? "00",
-    ).replace(/\D/g, "").slice(0, 6) || "00",
-  };
-}
-
 function scanTrainRowReactValues(row, visitor) {
   const visited = new Set();
 
@@ -1603,32 +1455,6 @@ function getTrainFareMetadata(row, segmentIndex = 0) {
   return result;
 }
 
-function normalizeTrainFareEntries(entries) {
-  const fares = {};
-  (Array.isArray(entries) ? entries : []).forEach((entry) => {
-    const digits = String(entry?.sumAmt ?? "").replace(/\D/g, "");
-    if (!digits) return;
-    const amount = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "원";
-    const seatName = String(entry?.psrmClNm || "");
-    if (/특실|우등|first|special/i.test(seatName)) {
-      fares.special = amount;
-    } else if (!fares.general) {
-      fares.general = amount;
-    }
-  });
-  return fares;
-}
-
-function getTrainFareCacheKey(metadata) {
-  return [
-    metadata.runDate,
-    metadata.trainNo,
-    metadata.departureStationCode,
-    metadata.arrivalStationCode,
-    metadata.seatAttributeCode,
-  ].join(":");
-}
-
 function requestTrainFare(metadata) {
   const cacheKey = getTrainFareCacheKey(metadata);
   if (trainFareCache.has(cacheKey)) return trainFareCache.get(cacheKey);
@@ -1752,29 +1578,6 @@ function isSoldOutTrainFareBox(box) {
 function isStandingTrainFareBox(box) {
   return box.classList.contains("standing_seat")
     || /입석|standing/i.test(String(box.textContent || ""));
-}
-
-function roundKorailTrainFare(amount) {
-  const lowerHundred = Math.floor(amount / 100) * 100;
-  return amount - lowerHundred > 50 ? lowerHundred + 100 : lowerHundred;
-}
-
-function calculateDiscountedTrainFare(amount, discountPercent) {
-  const originalFare = Number(String(amount || "").replace(/\D/g, ""));
-  if (!Number.isFinite(originalFare) || originalFare <= 0) return amount;
-  const discountedFare = roundKorailTrainFare(
-    originalFare * ((100 - discountPercent) / 100),
-  );
-  return String(discountedFare).replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "원";
-}
-
-function calculateStandingTrainFare(amount) {
-  return calculateDiscountedTrainFare(amount, 15);
-}
-
-function calculateTransferTrainFare(amount, isStanding) {
-  const standingFare = isStanding ? calculateStandingTrainFare(amount) : amount;
-  return calculateDiscountedTrainFare(standingFare, 30);
 }
 
 function getTrainFareItemCategory(item) {
@@ -2051,7 +1854,15 @@ async function updateTrainStationsFromUserTimeModal(buttonIndex, requestVersion,
     ? (groupIndex === 0 ? "leading" : groupIndex === segments.length - 1 ? "trailing" : "auto")
     : "auto";
   const activeStations = sliceTrainStations(stationNames, segment.dep, segment.arr, side);
-  const fullStations = stationNames;
+  const isCombinedTransfer = segments.length > 1
+    && segments.every((_, index) => selectedTransferSegmentIndexes.has(index));
+  const fullStations = getCombinedTransferFullStations(
+    stationNames,
+    segment,
+    groupIndex,
+    segments.length,
+    isCombinedTransfer,
+  );
   const transferStations = getTransferStationNames(segments);
 
   if (selectedTrainStationGroups.length !== segments.length) {
