@@ -1,5 +1,5 @@
 param(
-  [string]$OutputPath = ".\dist\korail-map-panel.zip"
+  [string]$OutputPath = ".\dist\korail-map-extension.zip"
 )
 
 $ErrorActionPreference = "Stop"
